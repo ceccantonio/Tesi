@@ -20,6 +20,7 @@ https://github.com/marvync/Laser-automation-NewFocus
 import glob
 import os
 import sys
+import time
 
 # ---------------------------------------------------------------- CONFIGURAZIONE
 # ProductID USB standard dei controller TLB-6700 (dall'esempio di riferimento).
@@ -73,20 +74,30 @@ import Newport  # noqa: E402
 tlb = Newport.USBComm.USB()
 
 print(f"\nApro i dispositivi con ProductID={PRODUCT_ID}...")
-tlb.OpenDevices(PRODUCT_ID, True)
+esito_open = tlb.OpenDevices(PRODUCT_ID, True)
+print(f"Valore restituito da OpenDevices: {esito_open!r}")
+
+# Diamo tempo al driver di completare l'enumerazione prima di leggere la tabella
+time.sleep(1.5)
 
 tabella = tlb.GetDeviceTable()
+print(f"\nTipo restituito da GetDeviceTable: {type(tabella)}")
+print(f"Valore grezzo: {tabella!r}")
+
 print("\nDispositivi trovati (DeviceKey -> info):")
+trovato_qualcosa = False
 try:
     for voce in tabella:
         print(f"  {voce}")
+        trovato_qualcosa = True
 except TypeError:
-    # GetDeviceTable può restituire un oggetto .NET non iterabile direttamente
-    print(f"  {tabella}")
-    print(
-        "\n(Se sopra non vedi le singole DeviceKey, dimmi cosa stampa esattamente "
-        "cosi' capiamo come leggere la struttura restituita.)"
-    )
+    print("  (non iterabile con un semplice for, vedi 'Valore grezzo' sopra)")
+
+if not trovato_qualcosa:
+    print("\nNessun dispositivo nella tabella. Metodi/proprietà disponibili su 'tlb':")
+    for nome in dir(tlb):
+        if not nome.startswith("_"):
+            print(f"  - {nome}")
 
 tlb.CloseDevices()
 print("\nFatto. Usa la DeviceKey qui sopra (es. '6700 SN1234') nello script successivo.")
