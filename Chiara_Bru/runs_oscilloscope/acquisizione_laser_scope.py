@@ -31,16 +31,14 @@ from tlb6700 import TLB6700
 OSC_VISA = "USB::0x0699::0x0408::C028813::INSTR"
 OSC_TIMEOUT_MS = 30000
 
-CHANNELS = ["CH1", "CH2", "CH3", "CH4"]
-CHANNELS_50OHM = ["CH3", "CH4"]  # canali da mettere a 50 ohm (vuoto se già impostati a mano)
+CHANNELS = ["CH1", "CH2"]  # solo i canali effettivamente collegati
+CHANNELS_50OHM = []  # canali da mettere a 50 ohm (vuoto se già impostati a mano)
 
 LABELS = {
     "CH1": "CH1 (laser ramp)",
     "CH2": "CH2 (R spectrum)",
-    "CH3": "CH3",
-    "CH4": "CH4",
 }
-COLORS = {"CH1": "tab:red", "CH2": "tab:blue", "CH3": "tab:green", "CH4": "tab:orange"}
+COLORS = {"CH1": "tab:red", "CH2": "tab:blue"}
 
 LASER_WAVELENGTH_START = 1550.0  # nm, <-- da impostare
 LASER_WAVELENGTH_STOP = 1560.0  # nm, <-- da impostare
@@ -165,14 +163,14 @@ def main():
     np.savetxt(csv_path, all_cols, delimiter=",", header=",".join(CHANNELS), comments="")
     print(f"\nDati salvati in: {csv_path}")
 
-    fig, axes = plt.subplots(4, 1, figsize=(10, 10), sharex=True)
+    fig, axes = plt.subplots(len(CHANNELS), 1, figsize=(10, 6), sharex=True)
     for ax, ch in zip(axes, CHANNELS):
         ax.plot(data[ch], color=COLORS[ch], lw=1.0, label=LABELS[ch])
         ax.set_ylabel("Voltage (V)", color=COLORS[ch])
         ax.tick_params(axis="y", labelcolor=COLORS[ch])
         ax.legend(loc="best")
     axes[-1].set_xlabel("Sample index")
-    fig.suptitle("Acquisizione sincronizzata con scan del laser (CH1-CH4)")
+    fig.suptitle(f"Acquisizione sincronizzata con scan del laser ({', '.join(CHANNELS)})")
     plt.tight_layout()
     plt.show()
 
