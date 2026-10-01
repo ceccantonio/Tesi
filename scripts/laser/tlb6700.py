@@ -29,19 +29,11 @@ Uso tipico:
     laser.close()
 """
 
-import glob
 import os
 import sys
 
 PRODUCT_ID = 0x100A  # = 4106 decimale, come in deviceID = hex2dec('100A')
 USB_ADDR = 1  # indirizzo USB del laser sul bus (0-31), come USBADDR nel .m
-
-CARTELLE_DA_CERCARE = [
-    r"C:\Program Files\New Focus",
-    r"C:\Program Files (x86)\New Focus",
-    r"C:\Program Files\Newport",
-    r"C:\Program Files (x86)\Newport",
-]
 
 # Range di sintonizzazione tipico dei TLB-6700 in banda C (verifica contro
 # l'etichetta/manuale del tuo esemplare se diverso).
@@ -59,14 +51,13 @@ _MESSAGGI_ERRORE = {
 
 
 def _trova_dll():
-    for cartella in CARTELLE_DA_CERCARE:
-        if not os.path.isdir(cartella):
-            continue
-        risultati = glob.glob(
-            os.path.join(cartella, "**", "UsbDllWrap.dll"), recursive=True
-        )
-        if risultati:
-            return risultati[0]
+    # Solo la copia nel repo: è la DLL confermata funzionante col codice
+    # MATLAB del laboratorio (laser_fix/UsbDllWrap.dll). Nessun fallback su
+    # altre DLL (es. quella installata dall'installer Newport): potrebbe
+    # essere una build diversa con comportamento diverso.
+    dll_locale = os.path.join(os.path.dirname(os.path.abspath(__file__)), "UsbDllWrap.dll")
+    if os.path.isfile(dll_locale):
+        return dll_locale
     return None
 
 

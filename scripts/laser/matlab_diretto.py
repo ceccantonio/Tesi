@@ -16,33 +16,17 @@ Corrispondenza con il MATLAB:
     NP_USB.Query(USBADDR, '*IDN?', querydata)   -> NP_USB.Query(USBADDR, "*IDN?", querydata)
 """
 
-import glob
 import os
 import sys
 
 USBADDR = 1
 DEVICE_ID = 0x100A  # hex2dec('100A')
 
-CARTELLE_DA_CERCARE = [
-    r"C:\Program Files\New Focus",
-    r"C:\Program Files (x86)\New Focus",
-    r"C:\Program Files\Newport",
-    r"C:\Program Files (x86)\Newport",
-]
-
-dll_path = None
-for cartella in CARTELLE_DA_CERCARE:
-    if os.path.isdir(cartella):
-        trovati = glob.glob(os.path.join(cartella, "**", "UsbDllWrap.dll"), recursive=True)
-        if trovati:
-            dll_path = trovati[0]
-            break
-
-if dll_path is None:
-    raise RuntimeError(
-        "UsbDllWrap.dll non trovata nelle cartelle note: "
-        + ", ".join(CARTELLE_DA_CERCARE)
-    )
+# Solo la DLL nel repo (confermata funzionante col MATLAB), nessun fallback
+# su altre DLL eventualmente installate altrove sul PC.
+dll_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "UsbDllWrap.dll")
+if not os.path.isfile(dll_path):
+    raise RuntimeError(f"UsbDllWrap.dll non trovata in {dll_path}")
 
 print(f"DLL trovata: {dll_path}")
 sys.path.append(os.path.dirname(dll_path))
