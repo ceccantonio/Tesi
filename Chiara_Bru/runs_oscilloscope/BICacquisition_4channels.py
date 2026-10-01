@@ -31,7 +31,7 @@ OSC_VISA = 'USB::0x0699::0x0408::C028813::INSTR'
 print("\nConnecting to Tektronix MDO3104...")
 rm = pyvisa.ResourceManager()
 osc = rm.open_resource(OSC_VISA)
-osc.timeout = 15000
+osc.timeout = 30000
 print("Oscilloscope connected.")
 
 
@@ -155,7 +155,12 @@ laser.close()
 print("Laser scan stopped and connection closed.")
 
 time.sleep(1.0)  # lascia che lo scope si assesti dopo lo stop dell'acquisizione
-data = {ch: acquire_channel(ch) for ch in CHANNELS}
+
+data = {}
+for ch in CHANNELS:
+    print(f"\nLeggo {ch}...")
+    data[ch] = acquire_channel(ch)
+    time.sleep(0.5)  # respiro tra un canale e l'altro (trasferimenti ASCII grandi)
 
 # Save all four channels in a single CSV file (truncated to the shortest one)
 csv_path = os.path.join(run_folder, "oscilloscope_sweep.csv")
