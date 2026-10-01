@@ -134,6 +134,8 @@ def wait_for_acquisition():
         if status == 0:
             print("Acquisition complete!")
             break
+        time.sleep(0.3)  # evita di martellare lo scope con query continue
+            break
 
 
 #Set termination for the channels that need 50 ohm (comment out if already set manually)
