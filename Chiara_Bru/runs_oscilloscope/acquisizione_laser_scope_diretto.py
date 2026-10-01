@@ -30,8 +30,8 @@ DEVICE_ID = 0x100A  # hex2dec('100A')
 
 LASER_WAVELENGTH_START = 1520.0  # nm, come trigger_scan.m
 LASER_WAVELENGTH_STOP = 1570.0   # nm, come trigger_scan.m
-LASER_SCAN_SPEED_FORWARD = 0.1   # nm/s
-LASER_SCAN_SPEED_BACKWARD = 5.0  # nm/s
+# Velocità di scan: NON impostata qui, come in trigger_scan.m ("Scan velocity
+# MUST be set by hand") - resta quella già impostata a mano sul laser.
 
 POLL_INTERVAL_S = 0.3
 CHANNEL_READ_PAUSE_S = 0.5
@@ -145,21 +145,13 @@ def main():
         laser_query(np_usb, querydata, "*IDN?")
         laser_query(np_usb, querydata, "OUTP:STAT?")
 
-        laser_write(np_usb, "OUTP:SCAN:STOP")
-        laser_write(np_usb, "SOUR:WAVE:DESSCANS 1")
         laser_write(np_usb, f"SOUR:WAVE:START {LASER_WAVELENGTH_START}")
         laser_write(np_usb, f"SOUR:WAVE:STOP {LASER_WAVELENGTH_STOP}")
-        laser_write(np_usb, f"SOUR:WAVE:SLEW:FORW {LASER_SCAN_SPEED_FORWARD}")
-        laser_write(np_usb, f"SOUR:WAVE:SLEW:RET {LASER_SCAN_SPEED_BACKWARD}")
-        laser_write(np_usb, "OUTP:STAT 1")
 
         arm_acquisition(osc)
         laser_write(np_usb, "OUTP:SCAN:START")
 
         wait_for_acquisition(osc)
-
-        laser_write(np_usb, "OUTP:SCAN:STOP")
-        laser_write(np_usb, "OUTP:STAT 0")
     finally:
         np_usb.CloseDevices()
         print("Connessione al laser chiusa.")
