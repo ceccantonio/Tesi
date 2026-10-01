@@ -104,6 +104,14 @@ class TLB6700:
     def get_output(self):
         return self.query("OUTPut:STATe?")
 
+    def set_track(self, on):
+        """
+        Abilita/disabilita il tracking (necessario perché il laser segua
+        davvero i comandi di wavelength, sia in set_wavelength che durante
+        uno scan).
+        """
+        return self.query(f"OUTPut:TRACK {1 if on else 0}")
+
     def set_wavelength(self, nm):
         self.query(f"SOURce:WAVElength {nm}")
         self.query("OUTPut:TRACK 1")
@@ -128,6 +136,7 @@ class TLB6700:
         )
 
     def start_scan(self, num_scans=1):
+        self.set_track(True)  # senza tracking attivo il laser non segue lo scan
         self.query(f"SOUR:WAVE:DESSCANS {num_scans}")
         return self.query("OUTPut:SCAN:START")
 
