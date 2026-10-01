@@ -1,10 +1,14 @@
 # BIC Acquisition - 4 channel version
 
 import os
+import sys
 import numpy as np
 import datetime
 import pyvisa
 import matplotlib.pyplot as plt
+
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts", "laser"))
+from tlb6700 import TLB6700
 
 #Data folder
 today_str = datetime.date.today().strftime("%Y-%m-%d")
@@ -28,6 +32,26 @@ rm = pyvisa.ResourceManager()
 osc = rm.open_resource(OSC_VISA)
 osc.timeout = 5000
 print("Oscilloscope connected.")
+
+
+#Connect to laser (TLB-6700) and configure the scan
+# DEVICE_KEY: scoprila eseguendo scripts/laser/trova_tlb6700.py (è specifica
+# del numero di serie del tuo laser, es. "6700 SN1234").
+LASER_DEVICE_KEY = "6700 SN0000"  # <-- sostituisci con la tua DeviceKey
+
+LASER_WAVELENGTH_START = 1550.0  # nm, <-- da impostare
+LASER_WAVELENGTH_STOP = 1560.0   # nm, <-- da impostare
+LASER_SCAN_SPEED_FORWARD = 0.1   # nm/s, <-- da impostare
+LASER_SCAN_SPEED_BACKWARD = 5.0  # nm/s, <-- da impostare
+
+print("\nConnecting to TLB-6700 laser...")
+laser = TLB6700(LASER_DEVICE_KEY)
+laser.open()
+print("Laser connected:", laser.idn())
+
+laser.set_scan_limits(LASER_WAVELENGTH_START, LASER_WAVELENGTH_STOP)
+laser.set_scan_speeds(LASER_SCAN_SPEED_FORWARD, LASER_SCAN_SPEED_BACKWARD)
+laser.set_output(True)
 
 
 #Configure full-screen waveform transfer
@@ -86,15 +110,23 @@ def acquire_channel(source="CH1"):
     return volts
 
 
-# Wait for triggered acquisition
+# Arm the scope, then wait for the triggered acquisition to complete
+def arm_acquisition():
+    """
+    Arm the scope for a single triggered acquisition. Call this BEFORE
+    starting the laser scan, so the scope is already waiting for the
+    trigger (laser ramp on CH1) when the scan begins.
+    """
+    osc.write("ACQ:STOPAFTER SEQUENCE")
+    osc.write("ACQ:STATE RUN")
+
+
 def wait_for_acquisition():
     """
     Wait until the scope completes a single triggered acquisition.
+    Call arm_acquisition() (and start the laser scan) before this.
     """
     print("\nWaiting for the oscilloscope to finish the triggered acquisition...")
-
-    osc.write("ACQ:STOPAFTER SEQUENCE")
-    osc.write("ACQ:STATE RUN")
 
     while True:
         status = int(osc.query("ACQ:STATE?"))
@@ -108,8 +140,17 @@ for ch in CHANNELS_50OHM:
     set_termination(ch, ohm50=True)
 
 
-#MAIN: Wait for trigger, then read all four channels once
+#MAIN: arm the scope, start the laser scan (triggers the scope via CH1's
+# laser-ramp signal), wait for acquisition, then read all four channels once
+arm_acquisition()
+laser.start_scan()
+
 wait_for_acquisition()
+
+laser.stop_scan()
+laser.set_output(False)
+laser.close()
+print("Laser scan stopped and connection closed.")
 
 data = {ch: acquire_channel(ch) for ch in CHANNELS}
 
