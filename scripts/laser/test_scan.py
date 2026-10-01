@@ -8,8 +8,11 @@ La DeviceKey viene trovata automaticamente da TLB6700.open() (deve
 esserci un solo laser TLB-6700 collegato).
 """
 
+import os
+import sys
 import time
 
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from tlb6700 import TLB6700
 
 # ---------------------------------------------------------------- CONFIGURAZIONE
