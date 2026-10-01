@@ -52,12 +52,20 @@ _MESSAGGI_ERRORE = {
 
 def _trova_dll():
     # Solo la copia nel repo: è la DLL confermata funzionante col codice
-    # MATLAB del laboratorio (laser_fix/UsbDllWrap.dll). Nessun fallback su
-    # altre DLL (es. quella installata dall'installer Newport): potrebbe
-    # essere una build diversa con comportamento diverso.
+    # 1) Percorso confermato funzionante (quello usato dall'installer Newport,
+    #    testato con successo in matlab_diretto.py)
+    dll_confermata = (
+        r"C:\Program Files\New Focus\New Focus Tunable Laser Application\Bin\UsbDllWrap.dll"
+    )
+    if os.path.isfile(dll_confermata):
+        return dll_confermata
+
+    # 2) Riserva: copia nel repo (laser_fix/UsbDllWrap.dll), utile su un PC
+    #    dove il software Newport non è installato in quel percorso esatto
     dll_locale = os.path.join(os.path.dirname(os.path.abspath(__file__)), "UsbDllWrap.dll")
     if os.path.isfile(dll_locale):
         return dll_locale
+
     return None
 
 
