@@ -36,23 +36,25 @@ print("Oscilloscope connected.")
 
 
 #Connect to laser (TLB-6700) and configure the scan
-# DEVICE_KEY: scoprila eseguendo scripts/laser/trova_tlb6700.py (è specifica
-# del numero di serie del tuo laser, es. "6700 SN1234").
-LASER_DEVICE_KEY = "6700 SN23163"  # numero di serie letto dall'etichetta del laser
-
+# La DeviceKey viene trovata automaticamente da laser.open() (deve esserci
+# un solo laser TLB-6700 collegato).
 LASER_WAVELENGTH_START = 1550.0  # nm, <-- da impostare
 LASER_WAVELENGTH_STOP = 1560.0   # nm, <-- da impostare
 LASER_SCAN_SPEED_FORWARD = 0.1   # nm/s, <-- da impostare
 LASER_SCAN_SPEED_BACKWARD = 5.0  # nm/s, <-- da impostare
 
 print("\nConnecting to TLB-6700 laser...")
-laser = TLB6700(LASER_DEVICE_KEY)
+laser = TLB6700()
 laser.open()
 print("Laser connected:", laser.idn())
 
-laser.set_scan_limits(LASER_WAVELENGTH_START, LASER_WAVELENGTH_STOP)
-laser.set_scan_speeds(LASER_SCAN_SPEED_FORWARD, LASER_SCAN_SPEED_BACKWARD)
-laser.set_output(True)
+laser.setup_sweep(
+    start_nm=LASER_WAVELENGTH_START,
+    stop_nm=LASER_WAVELENGTH_STOP,
+    speed=LASER_SCAN_SPEED_FORWARD,
+    return_speed=LASER_SCAN_SPEED_BACKWARD,
+)
+laser.on()
 
 
 #Configure full-screen waveform transfer
@@ -145,12 +147,12 @@ for ch in CHANNELS_50OHM:
 #MAIN: arm the scope, start the laser scan (triggers the scope via CH1's
 # laser-ramp signal), wait for acquisition, then read all four channels once
 arm_acquisition()
-laser.start_scan()
+laser.start_sweep()
 
 wait_for_acquisition()
 
-laser.stop_scan()
-laser.set_output(False)
+laser.stop_sweep()
+laser.off()
 laser.close()
 print("Laser scan stopped and connection closed.")
 

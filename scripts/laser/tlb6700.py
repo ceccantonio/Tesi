@@ -1,37 +1,43 @@
 """
-Driver minimale per il laser sintonizzabile Newport/New Focus TLB-6700,
-basato sulla DLL .NET proprietaria (UsbDllWrap.dll) installata insieme al
-software Newport, non su VISA/seriale (il TLB-6700 non espone una porta
-COM: usa un driver USB Jungo + wrapper .NET).
+Driver per il laser sintonizzabile Newport/New Focus TLB-6700, basato su
+un driver pubblico testato (Rhys Povey, 2021) che usa la stessa DLL .NET
+proprietaria (UsbDllWrap.dll) installata insieme al software Newport
+(il TLB-6700 non usa VISA/porte seriali: driver USB Jungo + wrapper .NET).
 
 Richiede:
     pip install pythonnet
 
-Il set di comandi SCPI (SOURce:WAVElength, OUTPut:SCAN:START, ecc.) è
-preso da un esempio pubblico funzionante con lo stesso strumento:
-https://github.com/marvync/Laser-automation-NewFocus
-Verificalo comunque contro il manuale del tuo TLB-6700 se qualcosa non
-si comporta come previsto (firmware diversi possono avere differenze).
+Differenze rispetto alla prima versione (basata solo sul notebook
+marvync/Laser-automation-NewFocus):
+- la DeviceKey viene trovata automaticamente con GetDeviceKeys(), non va
+  più scritta a mano (deve però esserci un solo laser collegato)
+- il laser viene messo esplicitamente in modalità "remote control"
+  (SYSTem:MCONtrol REMote) alla connessione: senza questo, i comandi di
+  scan mandati da qui potrebbero essere accettati ma non avere alcun
+  effetto reale se il laser resta in modalità locale/manuale
+- i comandi di scrittura (write) controllano che la risposta sia "OK" e
+  sollevano un errore se il laser rifiuta il comando, invece di
+  ignorarlo in silenzio
 
 Uso tipico:
 
-    laser = TLB6700(device_key="6700 SN1234")  # trovala con trova_tlb6700.py
+    laser = TLB6700()
     laser.open()
-    laser.set_scan_limits(1550.0, 1560.0)
-    laser.set_scan_speeds(forward=0.1, backward=5.0)
-    laser.set_output(True)
-    laser.start_scan()
+    laser.setup_sweep(start_nm=1550.0, stop_nm=1560.0, speed=0.1)
+    laser.on()
+    laser.start_sweep()
     ...
-    laser.stop_scan()
-    laser.set_output(False)
+    laser.stop_sweep()
+    laser.off()
     laser.close()
 """
 
 import glob
 import os
 import sys
+import time
 
-PRODUCT_ID = 4106  # ProductID USB standard dei controller TLB-6700
+PRODUCT_ID = 4106  # ProductID USB dei controller TLB-6700 (decimale di 0x100A)
 
 CARTELLE_DA_CERCARE = [
     r"C:\Program Files\New Focus",
@@ -39,6 +45,11 @@ CARTELLE_DA_CERCARE = [
     r"C:\Program Files\Newport",
     r"C:\Program Files (x86)\Newport",
 ]
+
+# Range di sintonizzazione tipico dei TLB-6700 in banda C (verifica contro
+# l'etichetta/manuale del tuo esemplare se diverso).
+WAVELENGTH_MIN_NM = 1520
+WAVELENGTH_MAX_NM = 1570
 
 
 def _trova_dll():
@@ -54,16 +65,14 @@ def _trova_dll():
 
 
 class TLB6700:
-    def __init__(self, device_key, product_id=PRODUCT_ID):
-        """
-        device_key: stringa come "6700 SN1234", specifica del tuo laser.
-                    Scoprila eseguendo trova_tlb6700.py.
-        """
-        self.device_key = device_key
+    def __init__(self, product_id=PRODUCT_ID):
         self.product_id = product_id
         self._tlb = None
+        self._answer = None
+        self.device_key = None
 
     def open(self):
+        """Trova la DLL, apre il dispositivo e scopre la sua DeviceKey."""
         dll_path = _trova_dll()
         if dll_path is None:
             raise RuntimeError(
@@ -82,17 +91,39 @@ class TLB6700:
         self._tlb.OpenDevices(self.product_id, True)
         self._answer = StringBuilder(64)
 
-        self.reset()  # *RST, come nel riferimento, prima di qualsiasi altro comando
+        ndevices, keystrings = self._tlb.GetDeviceKeys("")
+        if ndevices != 1:
+            raise RuntimeError(
+                f"Trovati {ndevices} dispositivi laser (ne serve esattamente 1). "
+                f"Chiavi viste: {list(keystrings) if keystrings else keystrings}"
+            )
+        self.device_key = keystrings[0]
+        print(f"{self.device_key} connesso.")
+
+        self.reset()
+        self.write("syst:mcon rem")  # modalità controllo remoto
 
     def close(self):
         if self._tlb is not None:
-            self._tlb.CloseDevices()
-            self._tlb = None
+            try:
+                self.write("syst:mcon loc")  # torna in modalità locale
+            finally:
+                self._tlb.CloseDevices()
+                self._tlb = None
 
-    def query(self, msg):
+    # --- I/O di base -----------------------------------------------------
+    def query(self, text):
         self._answer.Clear()
-        self._tlb.Query(self.device_key, msg, self._answer)
+        self._tlb.Query(self.device_key, text, self._answer)
         return self._answer.ToString()
+
+    def write(self, text):
+        """Manda un comando (non una query) e controlla che risponda 'OK'."""
+        if text.strip().endswith("?"):
+            raise ValueError(f"write() non va usato per query: {text!r}")
+        risposta = self.query(text)
+        if risposta != "OK":
+            raise RuntimeError(f"Comando {text!r} fallito, risposta: {risposta!r}")
 
     def idn(self):
         return self.query("*IDN?")
@@ -100,50 +131,73 @@ class TLB6700:
     def reset(self):
         return self.query("*RST")
 
+    def operation_complete(self):
+        return self.query("*OPC?")
+
+    # --- Output on/off -----------------------------------------------------
     def set_output(self, on):
-        return self.query(f"OUTPut:STATe {1 if on else 0}")
+        if self.query("outp:stat?") != ("1" if on else "0"):
+            self.write(f"outp:stat {1 if on else 0}")
 
     def get_output(self):
-        return self.query("OUTPut:STATe?")
+        return self.query("outp:stat?")
 
+    def on(self, wait=True):
+        self.set_output(True)
+        if wait:
+            time.sleep(float(self.query("ondelay?")) / 1000)
+
+    def off(self):
+        self.set_output(False)
+
+    # --- Wavelength / tracking --------------------------------------------
     def set_track(self, on):
-        """
-        Abilita/disabilita il tracking (necessario perché il laser segua
-        davvero i comandi di wavelength, sia in set_wavelength che durante
-        uno scan).
-        """
-        return self.query(f"OUTPut:TRACK {1 if on else 0}")
+        """Necessario perché il laser segua davvero i comandi di wavelength/scan."""
+        self.write(f"outp:trac {1 if on else 0}")
 
     def set_wavelength(self, nm):
-        self.query(f"SOURce:WAVElength {nm}")
-        self.query("OUTPut:TRACK 1")
-        return self.query("SOURce:WAVElength?")
+        self.set_track(True)
+        if float(self.query("sour:wave?")) != nm:
+            self.write(f"sour:wave {nm}")
+        return self.get_wavelength()
 
     def get_wavelength(self):
-        return self.query("SOURce:WAVElength?")
+        return self.query("sens:wave?")
 
+    # --- Scan / sweep --------------------------------------------------------
     def set_scan_limits(self, start_nm, stop_nm):
-        self.query(f"SOURce:WAVElength:START {start_nm}")
-        self.query(f"SOURce:WAVElength:STOP {stop_nm}")
-        return self.query("SOURce:WAVElength:START?"), self.query(
-            "SOURce:WAVElength:STOP?"
-        )
+        for nm in (start_nm, stop_nm):
+            if not (WAVELENGTH_MIN_NM <= nm <= WAVELENGTH_MAX_NM):
+                raise ValueError(
+                    f"Wavelength {nm} nm fuori dal range tipico "
+                    f"[{WAVELENGTH_MIN_NM}, {WAVELENGTH_MAX_NM}] nm."
+                )
+        self.write(f"sour:wave:start {start_nm}")
+        self.write(f"sour:wave:stop {stop_nm}")
 
     def set_scan_speeds(self, forward, backward):
         """forward/backward in nm/s."""
-        self.query(f"SOURce:WAVE:SLEW:FORWard {forward}")
-        self.query(f"SOURce:WAVE:SLEW:RETurn {backward}")
-        return self.query("SOURce:WAVE:SLEW:FORWard?"), self.query(
-            "SOURce:WAVE:SLEW:RETurn?"
-        )
+        self.write(f"sour:wave:slew:forw {forward}")
+        self.write(f"sour:wave:slew:ret {backward}")
 
+    def setup_sweep(self, start_nm, stop_nm, speed, return_speed=None, scans=1):
+        """Configura uno sweep completo: limiti, velocità, numero di scan."""
+        self.stop_sweep()
+        self.write("sour:wave:scancfg 0")  # laser acceso anche nel ritorno
+        self.write(f"sour:wave:desscans {scans}")
+        self.set_scan_limits(start_nm, stop_nm)
+        self.set_scan_speeds(speed, return_speed if return_speed is not None else speed)
+
+    def start_sweep(self):
+        self.write("outp:scan:start")
+
+    def stop_sweep(self):
+        self.write("outp:scan:stop")
+
+    # Alias per compatibilità con gli script che già usano questi nomi
     def start_scan(self, num_scans=1):
-        self.set_track(True)  # senza tracking attivo il laser non segue lo scan
-        self.query(f"SOUR:WAVE:DESSCANS {num_scans}")
-        return self.query("OUTPut:SCAN:START")
+        self.write(f"sour:wave:desscans {num_scans}")
+        self.start_sweep()
 
     def stop_scan(self):
-        return self.query("OUTPut:SCAN:STOP")
-
-    def operation_complete(self):
-        return self.query("*OPC?")
+        self.stop_sweep()
