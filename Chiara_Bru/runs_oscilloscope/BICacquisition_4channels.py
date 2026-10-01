@@ -38,7 +38,7 @@ print("Oscilloscope connected.")
 #Connect to laser (TLB-6700) and configure the scan
 # DEVICE_KEY: scoprila eseguendo scripts/laser/trova_tlb6700.py (è specifica
 # del numero di serie del tuo laser, es. "6700 SN1234").
-LASER_DEVICE_KEY = "6700 SN0000"  # <-- sostituisci con la tua DeviceKey
+LASER_DEVICE_KEY = "6700 SN23163"  # numero di serie letto dall'etichetta del laser
 
 LASER_WAVELENGTH_START = 1550.0  # nm, <-- da impostare
 LASER_WAVELENGTH_STOP = 1560.0   # nm, <-- da impostare

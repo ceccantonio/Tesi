@@ -12,7 +12,7 @@ import time
 from tlb6700 import TLB6700
 
 # ---------------------------------------------------------------- CONFIGURAZIONE
-DEVICE_KEY = "6700 SN0000"  # <-- sostituisci con la tua DeviceKey
+DEVICE_KEY = "6700 SN23163"  # numero di serie letto dall'etichetta del laser
 
 WAVELENGTH_START = 1550.0  # nm
 WAVELENGTH_STOP = 1560.0   # nm
