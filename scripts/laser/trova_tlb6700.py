@@ -94,7 +94,37 @@ except TypeError:
     print("  (non iterabile con un semplice for, vedi 'Valore grezzo' sopra)")
 
 if not trovato_qualcosa:
-    print("\nNessun dispositivo nella tabella. Metodi/proprietà disponibili su 'tlb':")
+    print("\nNessun dispositivo in GetDeviceTable. Provo altri metodi...")
+
+    try:
+        print(f"\nNumProductsConnected: {tlb.NumProductsConnected!r}")
+    except Exception as e:
+        print(f"NumProductsConnected -> ERRORE: {e}")
+
+    try:
+        chiavi = tlb.GetDeviceKeys()
+        print(f"\nGetDeviceKeys() -> tipo: {type(chiavi)}, valore: {chiavi!r}")
+        for k in chiavi:
+            print(f"  chiave: {k!r}")
+    except Exception as e:
+        print(f"GetDeviceKeys() -> ERRORE: {e}")
+
+    try:
+        attaccati = tlb.GetAttachedDevices()
+        print(f"\nGetAttachedDevices() -> tipo: {type(attaccati)}, valore: {attaccati!r}")
+        for d in attaccati:
+            print(f"  dispositivo: {d!r}")
+    except Exception as e:
+        print(f"GetAttachedDevices() -> ERRORE: {e}")
+
+    try:
+        info_list = tlb.GetDevInfoList()
+        print(f"\nGetDevInfoList() -> tipo: {type(info_list)}, valore: {info_list!r}")
+    except Exception as e:
+        print(f"GetDevInfoList() -> ERRORE: {e}")
+
+if not trovato_qualcosa:
+    print("\nMetodi/proprietà disponibili su 'tlb':")
     for nome in dir(tlb):
         if not nome.startswith("_"):
             print(f"  - {nome}")
