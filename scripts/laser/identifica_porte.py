@@ -21,7 +21,7 @@ Uso:
 import pyvisa
 
 # ---------------------------------------------------------------- CONFIGURAZIONE
-RISORSE = ["ASRL1::INSTR", "ASRL5::INSTR"]
+RISORSE = ["ASRL1::INSTR", "ASRL4::INSTR", "ASRL5::INSTR"]
 TIMEOUT_MS = 800  # basso apposta: dobbiamo provare molte combinazioni
 
 BAUD_RATES = [9600, 19200, 38400, 57600, 115200]
