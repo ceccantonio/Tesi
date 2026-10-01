@@ -82,6 +82,8 @@ class TLB6700:
         self._tlb.OpenDevices(self.product_id, True)
         self._answer = StringBuilder(64)
 
+        self.reset()  # *RST, come nel riferimento, prima di qualsiasi altro comando
+
     def close(self):
         if self._tlb is not None:
             self._tlb.CloseDevices()
