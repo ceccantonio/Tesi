@@ -40,8 +40,8 @@ LABELS = {
 }
 COLORS = {"CH1": "tab:red", "CH2": "tab:blue"}
 
-LASER_WAVELENGTH_START = 1550.0  # nm, <-- da impostare
-LASER_WAVELENGTH_STOP = 1560.0  # nm, <-- da impostare
+LASER_WAVELENGTH_START = 1520.0  # nm, come trigger_scan.m (range completo)
+LASER_WAVELENGTH_STOP = 1570.0  # nm, come trigger_scan.m (range completo)
 LASER_SCAN_SPEED_FORWARD = 0.1  # nm/s, <-- da impostare
 LASER_SCAN_SPEED_BACKWARD = 5.0  # nm/s, <-- da impostare
 

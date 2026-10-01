@@ -16,7 +16,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from tlb6700 import TLB6700
 
 # ---------------------------------------------------------------- CONFIGURAZIONE
-WAVELENGTH_START = 1550.0  # nm
+WAVELENGTH_START = 1550.0  # nm (range piccolo, solo per test rapido isolato)
 WAVELENGTH_STOP = 1560.0   # nm
 SCAN_SPEED_FORWARD = 0.5   # nm/s (più rapido del default, solo per il test)
 SCAN_SPEED_BACKWARD = 5.0  # nm/s
