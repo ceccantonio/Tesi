@@ -128,26 +128,31 @@ def main():
     print("\nConnessione al laser TLB-6700...")
     laser = TLB6700()
     laser.open()
-    print("Laser connesso:", laser.idn())
+    try:
+        print("Laser connesso:", laser.idn())
 
-    laser.setup_sweep(
-        start_nm=LASER_WAVELENGTH_START,
-        stop_nm=LASER_WAVELENGTH_STOP,
-        speed=LASER_SCAN_SPEED_FORWARD,
-        return_speed=LASER_SCAN_SPEED_BACKWARD,
-    )
-    laser.on()
+        laser.setup_sweep(
+            start_nm=LASER_WAVELENGTH_START,
+            stop_nm=LASER_WAVELENGTH_STOP,
+            speed=LASER_SCAN_SPEED_FORWARD,
+            return_speed=LASER_SCAN_SPEED_BACKWARD,
+        )
+        laser.on()
 
-    # Arma lo scope, poi avvia lo scan (la rampa su CH1 fa scattare il trigger)
-    arm_acquisition(osc)
-    laser.start_sweep()
+        # Arma lo scope, poi avvia lo scan (la rampa su CH1 fa scattare il trigger)
+        arm_acquisition(osc)
+        laser.start_sweep()
 
-    wait_for_acquisition(osc)
+        wait_for_acquisition(osc)
 
-    laser.stop_sweep()
-    laser.off()
-    laser.close()
-    print("Scan del laser fermato e connessione chiusa.")
+        laser.stop_sweep()
+        laser.off()
+    finally:
+        # Chiude sempre la connessione al laser, anche se qualcosa sopra
+        # fallisce: altrimenti il dispositivo resta "agganciato" e il
+        # tentativo successivo fallisce con errori di comunicazione.
+        laser.close()
+        print("Connessione al laser chiusa.")
 
     time.sleep(1.0)  # lascia che lo scope si assesti dopo lo stop dell'acquisizione
 
