@@ -73,8 +73,9 @@ def arm_acquisition(osc):
     # In ARMED lo scope sta acquisendo il pre-trigger (PrTrig) e ignora i
     # trigger: lo scan parte solo quando lo stato non è più ARMED (READY).
     print("Attendo che lo scope finisca il pre-trigger (ARMED -> READY)...")
-    while osc.query("TRIGger:STATE?").strip().upper() == "ARMED":
+    while osc.query("TRIGger:STATE?").strip().upper() != "READY":
         time.sleep(POLL_INTERVAL_S)
+        print('waiting...')
     print("Scope pronto ad accettare il trigger.")
 
 
@@ -144,6 +145,7 @@ def main():
 
     osc = connetti_oscilloscopio()
     configura_scope(osc)
+    time.sleep(10)
 
     print("\nConnessione al laser TLB-6700 (stile diretto)...")
     np_usb, querydata = connetti_laser()
