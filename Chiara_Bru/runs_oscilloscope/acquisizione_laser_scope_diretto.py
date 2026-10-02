@@ -70,6 +70,12 @@ def configura_scope(osc):
 def arm_acquisition(osc):
     osc.write("ACQ:STOPAFTER SEQUENCE")
     osc.write("ACQ:STATE RUN")
+    # In ARMED lo scope sta acquisendo il pre-trigger (PrTrig) e ignora i
+    # trigger: lo scan parte solo quando lo stato non è più ARMED (READY).
+    print("Attendo che lo scope finisca il pre-trigger (ARMED -> READY)...")
+    while osc.query("TRIGger:STATE?").strip().upper() == "ARMED":
+        time.sleep(POLL_INTERVAL_S)
+    print("Scope pronto ad accettare il trigger.")
 
 
 def wait_for_acquisition(osc):
