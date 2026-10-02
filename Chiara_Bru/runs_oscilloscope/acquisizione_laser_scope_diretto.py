@@ -141,21 +141,18 @@ def main():
 
     print("\nConnessione al laser TLB-6700 (stile diretto)...")
     np_usb, querydata = connetti_laser()
-    try:
-        laser_query(np_usb, querydata, "*IDN?")
-        laser_query(np_usb, querydata, "OUTP:STAT?")
+    laser_query(np_usb, querydata, "*IDN?")
+    laser_query(np_usb, querydata, "OUTP:STAT?")
 
-        laser_write(np_usb, f"SOUR:WAVE:START {LASER_WAVELENGTH_START}")
-        laser_write(np_usb, f"SOUR:WAVE:STOP {LASER_WAVELENGTH_STOP}")
+    laser_write(np_usb, f"SOUR:WAVE:START {LASER_WAVELENGTH_START}")
+    laser_write(np_usb, f"SOUR:WAVE:STOP {LASER_WAVELENGTH_STOP}")
 
-        arm_acquisition(osc)
-        laser_write(np_usb, "OUTP:SCAN:START")
+    arm_acquisition(osc)
+    laser_write(np_usb, "OUTP:SCAN:START")
 
-        wait_for_acquisition(osc)
-    finally:
-        np_usb.CloseDevices()
-        print("Connessione al laser chiusa.")
+    wait_for_acquisition(osc)
 
+    # Nessun CloseDevices(): i .m del laboratorio non lo chiamano mai.
     time.sleep(1.0)
 
     data = {}
