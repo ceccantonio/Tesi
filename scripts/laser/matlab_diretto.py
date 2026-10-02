@@ -53,5 +53,4 @@ print(f"Query(USBADDR={USBADDR}, '*IDN?') -> esito={esito}, risposta={querydata.
 esito = NP_USB.Query(USBADDR, "OUTP:STAT?", querydata)
 print(f"Query(USBADDR={USBADDR}, 'OUTP:STAT?') -> esito={esito}, risposta={querydata.ToString()!r}")
 
-NP_USB.CloseDevices()
-print("\nDispositivo chiuso.")
+# Nessun CloseDevices(): i .m del laboratorio non lo chiamano mai.

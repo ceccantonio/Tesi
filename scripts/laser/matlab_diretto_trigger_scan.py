@@ -53,5 +53,4 @@ print(f"Write 'OUTP:SCAN:START' -> esito={esito}")
 
 time.sleep(pausetime)
 
-NP_USB.CloseDevices()
-print("\nDispositivo chiuso.")
+# Nessun CloseDevices(): i .m del laboratorio non lo chiamano mai.
