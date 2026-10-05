@@ -27,8 +27,8 @@ TIMEOUT_MS = 2000
 
 AXIS = "1"  # ID dell'asse sul controller C-863 (quasi sempre 1)
 
-MOVE_MM = 0.0  # spostamento relativo di prova in mm; 0 = nessun movimento
-PORTA_DA_MUOVERE = "ASRL4::INSTR"  # usata solo se MOVE_MM != 0
+MOVE_MM = -3.0  # spostamento relativo di prova in mm; 0 = nessun movimento
+PORTA_DA_MUOVERE = "ASRL5::INSTR"  # usata solo se MOVE_MM != 0
 TIMEOUT_MOVIMENTO_S = 30
 # ---------------------------------------------------------------------------
 

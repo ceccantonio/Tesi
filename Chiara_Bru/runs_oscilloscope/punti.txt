@@ -4,6 +4,5 @@
 # I punti vengono scansionati nell'ordine in cui sono scritti qui sotto.
 #
 # Esempio del formato (decommenta e sostituisci con i tuoi punti):
-# 90.0 140.0
-# 95.5 140.0
-# 95.5 145.2
+92.2980.0 146.5430
+
