@@ -1,0 +1,9 @@
+# Punti da scansionare con acquisizione_griglia_xy.ipynb
+# Una riga per punto: x y   (posizioni assolute in mm, limiti dei motori 0-150)
+# X = motore ASRL4, Y = motore ASRL5. Le righe che iniziano con # sono ignorate.
+# I punti vengono scansionati nell'ordine in cui sono scritti qui sotto.
+#
+# Esempio del formato (decommenta e sostituisci con i tuoi punti):
+# 90.0 140.0
+# 95.5 140.0
+# 95.5 145.2
