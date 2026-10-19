@@ -2,6 +2,7 @@
 
     python analysis.py run 2026-10-06/run_007       # modulation and Q of every point -> analysis.csv + two heatmaps
     python analysis.py point 2026-10-06/run_007 12  # check plot of one point
+    python analysis.py fano 2026-10-06/run_007/point_011_x91.818_y146.526.csv   # Fano fit of the resonances of one CSV
     python analysis.py list                         # list of the single measurements
     python analysis.py compare 1 2 3 --ref 1        # compare single measurements and divide them by measurement 1
     python analysis.py                              # no arguments: does what is written in "WHAT TO LOOK AT" below
@@ -13,6 +14,10 @@ Method (as in movemin.py): moving average of CH2 (np.convolve) inside the CH1 ra
  - modulation = max - min of the moving average inside the ramp;
  - Q of each peak = height (prominence) / width at half height, in volts per sample;
    each peak also gets its wavelength and its width in nm.
+
+Fano fit: y = y0 + A (q + eps)^2 / (1 + eps^2), eps = 2 (x - x0) / Gamma, with x in nm: x0 = resonance wavelength,
+Gamma = width, q = asymmetry, A >= 0 (so that q is unique); Q = x0 / Gamma. The resonances are located on the moving
+average, then each one is fitted on the raw data in a window around it (robust to the spurious spikes).
 
 Run folders contain griglia.csv (columns indice, x_mm, y_mm, file) and one CSV (columns CH1, CH2) per point:
 that format is the one written by the earlier notebooks and by acquisition.py.
@@ -37,6 +42,7 @@ POINT = None                # index of a point of RUN to plot in detail (e.g. 12
 COMPARE = None              # ids of the single measurements to compare (e.g. [1, 2, 3], [] = all); None = skip
 REFERENCE = None            # id of the reference measurement for the ratios (None = the first one)
 RECOMPUTE = False           # True: ignore analysis.csv and read all the CSV files again
+FANO = ""                   # CSV file to fit with a Fano line shape (e.g. "2026-10-06/run_007/point_011_x91.818_y146.526.csv"); "" = skip
 
 # ---------------------------------------------------------------- parameters of the method
 WINDOW = 10000              # moving-average length, in samples
@@ -47,6 +53,14 @@ LAMBDA_0, LAMBDA_1 = 1520.0, 1570.0   # nm at the start and at the end of the CH
 PROMINENCE_THRESHOLD = 0.1  # a peak counts if taller than this fraction of the excursion (modulation)...
 MIN_SNR = 10                # ...and than this multiple of the residual noise of the moving average...
 RUN_THRESHOLD = 0.1         # ...and than this fraction of the tallest peak of the whole run (no resonance = n.a.)
+FANO_PEAKS = 1              # Fano fit: how many resonances to fit (the tallest ones); None = all the located ones
+FANO_WINDOW = 3.0           # the fit uses the data within +- this many widths (FWHM) around the resonance
+FANO_RANGE = None           # (min_nm, max_nm) to choose the fit window by hand; None = automatic
+FANO_WHOLE_RAMP = False     # True: ONE fit on the whole ramp (for a ramp that contains a single resonance)
+FANO_SLOPE = False          # True: adds a sloped baseline s * (x - x0) to the model
+FANO_ROBUST = True          # True: soft_l1 loss (resists spurious spikes); False: least squares
+FANO_POINTS = 5000          # the window data are reduced to about this number of points (block median) before the fit
+FANO_DIP = False            # True: the resonances are minima of CH2 (to locate them); False: maxima
 Q_UNIT = 1e-6               # Q is shown in units of this (V per sample)
 DARK_LEVEL = 0.0            # CH2 level without light (single measurements)
 
@@ -273,6 +287,145 @@ def point_plot(folder, index):
     plt.show()
 
 
+# ---------------------------------------------------------------- Fano fit
+
+def fano(x, y0, A, x0, gamma, q, s=0.0):
+    """Fano line shape: y0 + s*(x - x0) + A * (q + eps)^2 / (1 + eps^2), eps = 2 (x - x0) / gamma."""
+    eps = 2.0 * (x - x0) / gamma
+    return y0 + s * (x - x0) + A * (q + eps) ** 2 / (1.0 + eps ** 2)
+
+
+def block_median(x, y, n_points):
+    """Reduce (x, y) to about n_points with a block median: removes the spurious spikes and makes the fit fast."""
+    n = max(1, len(x) // int(n_points))
+    k = len(x) // n
+    return x[:k * n].reshape(k, n).mean(axis=1), np.median(y[:k * n].reshape(k, n), axis=1)
+
+
+def fano_fit_peak(x, y, x0_guess, gamma_guess):
+    """Fano fit of one resonance on (x, y). Starts from several values of q and keeps the best one (the Fano fit has several
+    local minima). A >= 0 is imposed: (A, q) and (-A q^2, -1/q) describe the same curve, so without it q would not be unique.
+    Returns a dict with the parameters, their uncertainties, Q = x0 / Gamma and the model."""
+    scale = float(gamma_guess)
+    u = (x - x0_guess) / scale                      # normalized x: the resonance is near 0 with width ~1
+    span = float(np.max(y) - np.min(y))
+    edge = max(3, len(y) // 5)
+    y0_guess = float(np.median(np.concatenate([y[:edge], y[-edge:]])))
+    slope = bool(FANO_SLOPE)
+
+    def model(p, uu):
+        return fano(uu, p[0], p[1], p[2], p[3], p[4], p[5] if slope else 0.0)
+
+    def residuals(p):
+        return model(p, u) - y
+
+    lower = [-np.inf, 0.0, -2.0, 0.05, -50.0] + ([-np.inf] if slope else [])
+    upper = [np.inf, 20 * span, 2.0, 20.0, 50.0] + ([np.inf] if slope else [])
+    f_scale = max(1.4826 * float(np.median(np.abs(y - np.median(y)))) * 0.1, span * 0.02, 1e-12)
+    floor = float(np.percentile(y, 5))                                         # the minimum of the structure
+    A_guess = max(y0_guess - floor, 0.1 * span)
+    best = None
+    for q0 in (-3.0, -1.0, -0.3, 0.3, 1.0, 3.0):
+        fit = least_squares(residuals, [floor, A_guess, 0.0, 1.0, q0] + ([0.0] if slope else []), bounds=(lower, upper),
+                            loss="soft_l1" if FANO_ROBUST else "linear", f_scale=f_scale)
+        if best is None or fit.cost < best.cost:
+            best = fit
+    p = best.x
+    sigma2 = float(np.sum(residuals(p) ** 2)) / max(1, len(y) - len(p))
+    err = np.sqrt(np.clip(np.diag(np.linalg.pinv(best.jac.T @ best.jac) * sigma2), 0, None))
+    x0, gamma, s = x0_guess + scale * p[2], scale * p[3], (p[5] / scale) if slope else 0.0
+    result = {"y0": p[0], "A": p[1], "x0": x0, "gamma": gamma, "q": p[4], "s": s,
+              "err_y0": err[0], "err_A": err[1], "err_x0": scale * err[2], "err_gamma": scale * err[3], "err_q": err[4],
+              "rms": float(np.sqrt(np.mean(residuals(p) ** 2))), "Q": abs(x0) / gamma,
+              "model": lambda xx: fano(xx, p[0], p[1], x0, gamma, p[4], s)}
+    result["err_Q"] = result["Q"] * np.hypot(result["err_x0"] / x0 if x0 else 0.0, result["err_gamma"] / gamma)
+    return result
+
+
+def fano_fit(path):
+    """Fano fit of the resonances of one CSV (CH1, CH2) inside the CH1 ramp, with the x axis in wavelength (nm).
+    The resonances are located on the moving average, the fit is done on the data in a window around each one.
+    Prints the parameters, plots data + fit + residuals, and returns the list of results (one dict per resonance)."""
+    path = run_path(path)
+    ch1, ch2 = read_csv(path)
+    f = fit_ramp(ch1)
+    zone = valid_zone(f, len(ch1))
+    if zone is None:
+        print("no ramp in CH1: nothing to fit")
+        return []
+    a, b = zone
+    lam = wavelength(np.arange(len(ch2)), f)
+    _, peaks, _ = analyze_point(ch1, -ch2 if FANO_DIP else ch2)             # only to locate the resonances
+    if not peaks:
+        print("no resonance located on the moving average: lower PROMINENCE_THRESHOLD or MIN_SNR, or check FANO_DIP")
+        return []
+    peaks.sort(key=lambda p: -p["height"])                                   # tallest first
+    chosen = peaks[:1] if FANO_WHOLE_RAMP else peaks[:FANO_PEAKS]
+    chosen.sort(key=lambda p: p["index"])                                    # in order of position
+    print(f"{path.name}: {len(peaks)} resonances located, fitting {len(chosen)}")
+    fits = []
+    for n, p in enumerate(chosen, start=1):
+        if FANO_WHOLE_RAMP:
+            ia, ib = a, b
+        elif FANO_RANGE is not None:
+            inside = np.flatnonzero((lam >= min(FANO_RANGE)) & (lam <= max(FANO_RANGE)) & (np.arange(len(lam)) >= a) & (np.arange(len(lam)) <= b))
+            if inside.size == 0:
+                print(f"resonance {n}: FANO_RANGE is outside the ramp")
+                continue
+            ia, ib = inside[0], inside[-1]
+        else:
+            half = FANO_WINDOW * p["width"]
+            ia, ib = max(a, int(p["index"] - half)), min(b, int(p["index"] + half))
+        xw, yw = lam[ia:ib + 1], ch2[ia:ib + 1]
+        xr, yr = block_median(xw, yw, FANO_POINTS)
+        fit = fano_fit_peak(xr, yr, lam[p["index"]], p["width_nm"])
+        fit.update(n=n, xw=xw, yw=yw, xr=xr, yr=yr)
+        fits.append(fit)
+
+    print(f"{'n':>2} {'x0 (nm)':>12} {'Gamma (nm)':>12} {'q':>9} {'A':>11} {'y0':>11} {'Q = x0/Gamma':>14} {'rms':>10}")
+    for r in fits:
+        print(f"{r['n']:>2} {r['x0']:>12.5f} {r['gamma']:>12.5g} {r['q']:>9.3f} {r['A']:>11.4g} {r['y0']:>11.4g} {r['Q']:>14.5g} {r['rms']:>10.3g}")
+    for r in fits:
+        print(f"resonance {r['n']}: x0 = {r['x0']:.5f} +- {r['err_x0']:.2g} nm | Gamma = {r['gamma']:.5g} +- {r['err_gamma']:.2g} nm | "
+              f"q = {r['q']:.3f} +- {r['err_q']:.2g} | A = {r['A']:.4g} +- {r['err_A']:.2g} | y0 = {r['y0']:.4g} +- {r['err_y0']:.2g} | "
+              f"Q = {r['Q']:.5g} +- {r['err_Q']:.2g}")
+    if not fits:
+        return fits
+
+    step = max(1, len(ch2) // 20000)
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.plot(lam[::step], ch2[::step], color="gray", lw=0.6, alpha=0.7, label="raw CH2")
+    ax.plot(lam[::step], moving_average(ch2)[::step], color="red", lw=1.0, alpha=0.7, label=f"moving average (N={WINDOW})")
+    ax.axvspan(lam[a], lam[b], color="orange", alpha=0.1)
+    for r in fits:
+        ax.plot(r["xw"], r["model"](r["xw"]), color="blue", lw=2)
+        ax.annotate(str(r["n"]), (r["x0"], r["model"](np.array([r["x0"]]))[0]), textcoords="offset points", xytext=(0, 10), ha="center")
+    ax.set_xlim(LAMBDA_0 - 0.3 * (LAMBDA_1 - LAMBDA_0), LAMBDA_1 + 0.3 * (LAMBDA_1 - LAMBDA_0))
+    ax.set_xlabel("wavelength (nm)")
+    ax.set_ylabel("CH2 (V)")
+    ax.legend(loc="best")
+    plt.tight_layout()
+
+    fig, axes = plt.subplots(2, len(fits), figsize=(5.2 * len(fits), 5.5), sharex="col",
+                             gridspec_kw={"height_ratios": [3, 1]}, squeeze=False)
+    for k, r in enumerate(fits):
+        a1, a2 = axes[0, k], axes[1, k]
+        a1.plot(r["xw"], r["yw"], color="lightgray", lw=0.5, label="data")
+        a1.plot(r["xr"], r["yr"], "k.", ms=2, label="block median")
+        xx = np.linspace(r["xw"][0], r["xw"][-1], 2000)
+        a1.plot(xx, r["model"](xx), color="blue", lw=2, label="Fano fit")
+        a1.set_title(f"resonance {r['n']}: x0={r['x0']:.5g} nm, Gamma={r['gamma']:.4g} nm, q={r['q']:.2f}", fontsize=10)
+        a1.set_ylabel("CH2 (V)")
+        a1.legend(loc="best", fontsize=8)
+        a2.plot(r["xr"], r["yr"] - r["model"](r["xr"]), "k.", ms=2)
+        a2.axhline(0, color="blue", lw=1)
+        a2.set_ylabel("residuals")
+        a2.set_xlabel("wavelength (nm)")
+    plt.tight_layout()
+    plt.show()
+    return fits
+
+
 # ---------------------------------------------------------------- single measurements
 
 def measurements():
@@ -348,20 +501,26 @@ def main():
     a = sub.add_parser("point", help="check plot of one point of the run")
     a.add_argument("folder")
     a.add_argument("index", type=int)
+    a = sub.add_parser("fano", help="Fano fit of the resonances of one CSV")
+    a.add_argument("csv")
     sub.add_parser("list", help="list of the single measurements")
     a = sub.add_parser("compare", help="compare single measurements")
     a.add_argument("ids", nargs="*", type=int, help="measurement ids (empty = all)")
     a.add_argument("--ref", type=int, help="id of the reference measurement for the ratios")
     args = p.parse_args()
     if args.command is None:                                         # no arguments: use WHAT TO LOOK AT
-        if not RUN and COMPARE is None:
-            print("Nothing to do: set RUN and/or COMPARE in WHAT TO LOOK AT at the top of analysis.py, or use a command (python analysis.py -h)")
+        if not RUN and COMPARE is None and not FANO:
+            print("Nothing to do: set RUN, COMPARE and/or FANO in WHAT TO LOOK AT at the top of analysis.py, or use a command (python analysis.py -h)")
         if RUN:
             run_heatmaps(RUN, RECOMPUTE)
             if POINT is not None:
                 point_plot(RUN, POINT)
         if COMPARE is not None:
             compare(COMPARE, REFERENCE)
+        if FANO:
+            fano_fit(FANO)
+    elif args.command == "fano":
+        fano_fit(args.csv)
     elif args.command == "run":
         run_heatmaps(args.folder, args.recompute)
     elif args.command == "point":
