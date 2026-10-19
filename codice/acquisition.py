@@ -11,9 +11,10 @@ RETURN_WAIT_S = 5.0                                                             
 
 
 def scan(laser, scope):
-    """One full scan of the laser synchronized with the scope. Returns (N, 2): CH1, CH2."""
+    """One full scan of the laser synchronized with the scope. Returns (N, 2): CH1, CH2, or None if the scope never got READY."""
     laser.set_range()
-    scope.arm()
+    if not scope.arm():                       # the laser must start only when the scope is READY
+        return None
     laser.start()
     scope.wait()
     time.sleep(1.0)
@@ -23,8 +24,9 @@ def scan(laser, scope):
 
 
 def still_acquisition(scope):
-    """Acquisition without a scan (laser still, forced trigger). Returns (N, 2): CH1, CH2."""
-    scope.arm()
+    """Acquisition without a scan (laser still, forced trigger). Returns (N, 2): CH1, CH2, or None if the scope never got READY."""
+    if not scope.arm():
+        return None
     scope.force_trigger()
     scope.wait()
     time.sleep(1.0)
@@ -54,7 +56,11 @@ def scan_points(points, laser, scope, motors, settle=1.0):
                 continue
             time.sleep(settle)
             name = f"point_{i:03d}_x{x:.3f}_y{y:.3f}.csv"
-            np.savetxt(folder / name, scan(laser, scope), delimiter=",", header="CH1,CH2", comments="")
+            data = scan(laser, scope)
+            if data is None:
+                print("   scope not READY: point skipped")
+                continue
+            np.savetxt(folder / name, data, delimiter=",", header="CH1,CH2", comments="")
             with registry.open("a") as f:
                 f.write(f"{i},{x:.4f},{y:.4f},{name}\n")
     except KeyboardInterrupt:

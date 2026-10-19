@@ -42,6 +42,9 @@ def main():
                     print("Motors did not arrive or target out of limits: measurement cancelled")
                     continue
         data = scan(laser, scope) if SCAN else still_acquisition(scope)
+        if data is None:
+            print("Scope not READY: measurement cancelled")
+            continue
         with registry.open(newline="") as f:
             n = max([int(r["id"]) for r in csv.DictReader(f)] + [0]) + 1
         file = f"m{n:03d}_{''.join(c if c.isalnum() or c in '-_' else '_' for c in name)}.csv"

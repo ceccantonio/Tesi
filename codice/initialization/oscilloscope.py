@@ -23,20 +23,33 @@ class Oscilloscope:
         self.scope.write("DATA:WIDTH 1")
         self.scope.write("DATA:ENCdg ASCii")
 
-    def _wait_until(self, condition, timeout):
-        t0 = time.time()
-        while not condition() and time.time() - t0 < timeout:
-            time.sleep(0.1)
-
     def arm(self, timeout=120):
-        """Single sequence; returns when the scope is READY (only then a trigger is accepted)."""
+        """Single sequence; waits until the scope is READY (pre-trigger done: only then a trigger is accepted).
+        Returns True if it got READY, False after the timeout."""
         self.scope.write("ACQ:STOPAFTER SEQUENCE")
         self.scope.write("ACQ:STATE RUN")
-        self._wait_until(lambda: self.scope.query("TRIGger:STATE?").strip().upper() == "READY", timeout)
+        print("Waiting for the scope to finish the pre-trigger (-> READY)...")
+        last, t0 = None, time.time()
+        while time.time() - t0 < timeout:
+            state = self.scope.query("TRIGger:STATE?").strip().upper()
+            if state != last:
+                print(f"  trigger state: {state}")
+                last = state
+            if state == "READY":
+                return True
+            time.sleep(0.1)
+        print(f"Scope not READY after {timeout} s (trigger state: {last})")
+        return False
 
     def wait(self, timeout=600):
-        """Return when the acquisition is over."""
-        self._wait_until(lambda: int(self.scope.query("ACQ:STATE?")) == 0, timeout)
+        """Wait until the acquisition is over; True if it finished in time."""
+        print("Waiting for the acquisition to finish...")
+        t0 = time.time()
+        while int(self.scope.query("ACQ:STATE?")) != 0:
+            if time.time() - t0 > timeout:
+                return False
+            time.sleep(0.1)
+        return True
 
     def force_trigger(self):
         self.scope.write("TRIGger FORCe")
