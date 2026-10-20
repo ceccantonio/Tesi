@@ -410,20 +410,37 @@ def fano_fit(path):
               f"A = {p[1]:.4g} | y0 = {p[0]:.4g} | Q = x0/Gamma = {p[2] / p[3]:.5g}")
         results.append({"x0": p[2], "gamma": p[3], "q": p[4], "A": p[1], "y0": p[0], "Q": p[2] / p[3], "params": p, "errors": err, "x": x, "y": y})
     if results:
-        fig, axes = plt.subplots(2, len(results), figsize=(5.2 * len(results), 5.5), sharex="col",
-                                 gridspec_kw={"height_ratios": [3, 1]}, squeeze=False)
+        step = max(1, len(ch2) // 20000)                                          # only to draw fewer points
+        lam_all = wavelength(np.arange(len(ch2)), f)[::step]
+        fig, ax = plt.subplots(figsize=(10, 4))                                   # 1) the whole record, with the fit of every resonance
+        ax.plot(lam_all, ch2[::step], color="gray", lw=0.6, alpha=0.7, label="raw CH2")
+        ax.plot(lam_all, smooth[::step], color="red", lw=1.0, alpha=0.7, label=f"moving average (N={WINDOW})")
+        ax.axvspan(*wavelength((zone_start, zone_end), f), color="orange", alpha=0.1, label="measurement zone")
         for k, r in enumerate(results):
-            sub = slice(None, None, max(1, len(r["x"]) // 5000))                  # only to draw fewer points
-            axes[0, k].plot(r["x"][sub], r["y"][sub], color="lightgray", lw=0.5, label="moving average" if FANO_ON_AVERAGE else "raw data")
-            axes[0, k].plot(r["x"][sub], fano(r["x"][sub], *r["params"]), color="blue", lw=2, label="Fano fit")
-            axes[0, k].set_title(f"x0={r['x0']:.5g} nm, Gamma={r['gamma']:.4g} nm, q={r['q']:.2f}", fontsize=10)
-            axes[0, k].set_ylabel("CH2 (V)")
-            axes[0, k].legend(loc="best", fontsize=8)
-            axes[1, k].plot(r["x"][sub], (r["y"] - fano(r["x"], *r["params"]))[sub], "k.", ms=2)
-            axes[1, k].axhline(0, color="blue", lw=1)
-            axes[1, k].set_ylabel("residuals")
-            axes[1, k].set_xlabel("wavelength (nm)")
+            ax.plot(r["x"], fano(r["x"], *r["params"]), color="blue", lw=2, label="Fano fit" if k == 0 else None)
+            ax.annotate(str(k + 1), (r["x0"], fano(r["x0"], *r["params"])), textcoords="offset points", xytext=(0, 10), ha="center")
+        ax.set_xlabel("wavelength (nm)")
+        ax.set_ylabel("CH2 (V)")
+        ax.legend(loc="best")
         plt.tight_layout()
+        plt.show()
+        for k, r in enumerate(results):                                           # 2) one figure per resonance: data, fit and residuals
+            n = max(1, len(r["x"]) // 5000)                                       # block median (as in the old notebook), only to draw fewer points
+            m = len(r["x"]) // n
+            xb, yb = r["x"][:m * n].reshape(m, n).mean(axis=1), np.median(r["y"][:m * n].reshape(m, n), axis=1)
+            fig, (a1, a2) = plt.subplots(2, 1, figsize=(7, 5.5), sharex=True, gridspec_kw={"height_ratios": [3, 1]})
+            a1.plot(r["x"], r["y"], color="lightgray", lw=0.5, label="moving average" if FANO_ON_AVERAGE else "raw data")
+            a1.plot(xb, yb, "k.", ms=2, label="block median")
+            xx = np.linspace(r["x"][0], r["x"][-1], 2000)
+            a1.plot(xx, fano(xx, *r["params"]), color="blue", lw=2, label="Fano fit")
+            a1.set_title(f"resonance {k + 1}: x0={r['x0']:.5g} nm, Gamma={r['gamma']:.4g} nm, q={r['q']:.2f}", fontsize=10)
+            a1.set_ylabel("CH2 (V)")
+            a1.legend(loc="best", fontsize=8)
+            a2.plot(xb, yb - fano(xb, *r["params"]), "k.", ms=2)
+            a2.axhline(0, color="blue", lw=1)
+            a2.set_ylabel("residuals")
+            a2.set_xlabel("wavelength (nm)")
+            plt.tight_layout()
         plt.show()
     return results
 
