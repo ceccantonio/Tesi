@@ -46,7 +46,7 @@ def main():
             print("Scope not READY: measurement cancelled")
             continue
         with registry.open(newline="") as f:
-            n = max([int(r["id"]) for r in csv.DictReader(f)] + [0]) + 1
+            n = max([int(r["id"]) for r in csv.DictReader(line for line in f if not line.startswith("#"))] + [0]) + 1
         file = f"m{n:03d}_{''.join(c if c.isalnum() or c in '-_' else '_' for c in name)}.csv"
         np.savetxt(FOLDER / file, data, delimiter=",", header="CH1,CH2", comments="")
         with registry.open("a", newline="") as f:

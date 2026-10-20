@@ -24,6 +24,7 @@ Run folders contain griglia.csv (columns indice, x_mm, y_mm, file) and one CSV (
 that format is the one written by the earlier notebooks and by acquisition.py.
 """
 import argparse
+import io
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -71,8 +72,28 @@ def run_path(folder):
     return p if p.is_absolute() or p.exists() else DATA / p
 
 
+def read_table(path):
+    """Small CSV (a registry) as a table; the lines starting with # (e.g. a description written at the top) are ignored."""
+    with open(path, encoding="utf-8-sig") as f:
+        return pd.read_csv(io.StringIO("".join(line for line in f if not line.startswith("#"))))
+
+
+def read_registry(folder):
+    """griglia.csv of a run as a table with the columns indice, x_mm, y_mm, file. Tolerant to a BOM, spaces, capital letters and to
+    another name of the file column (it is then the column whose values end with .csv)."""
+    table = read_table(folder / "griglia.csv")
+    table.columns = [c.strip().lower() for c in table.columns]
+    if "file" not in table.columns:
+        names = [c for c in table.columns if table[c].astype(str).str.strip().str.endswith(".csv").all()]
+        if names:
+            table = table.rename(columns={names[0]: "file"})
+        else:
+            print(f"griglia.csv has the columns {list(table.columns)}: no column with the CSV file names")
+    return table
+
+
 def read_csv(path):
-    df = pd.read_csv(path, dtype=np.float32)
+    df = pd.read_csv(path, dtype=np.float32, comment="#")                  # the lines starting with # (description) are ignored
     return df["CH1"].to_numpy(float), df["CH2"].to_numpy(float)
 
 
@@ -168,7 +189,7 @@ def analyze_run(folder, recompute=False):
     if (folder / "analysis.csv").exists() and not recompute:
         return pd.read_csv(folder / "analysis.csv")
     points = []
-    for r in pd.read_csv(folder / "griglia.csv").itertuples():
+    for r in read_registry(folder).itertuples():
         if (folder / r.file).exists():
             modulation, peaks, f = analyze_point(*read_csv(folder / r.file))
             print(f"point {r.indice}: modulation {modulation:.4f} V, {len(peaks)} peaks")
@@ -259,7 +280,7 @@ def run_heatmaps(folder, recompute=False):
 def point_plot(folder, index, show=True):
     """Detail plot of one point of a run (see csv_plot). show=False: draw it without opening it yet."""
     folder = run_path(folder)
-    r = pd.read_csv(folder / "griglia.csv").query("indice == @index").iloc[0]
+    r = read_registry(folder).query("indice == @index").iloc[0]
     csv_plot(folder / r.file, f"Point {index} (X={r.x_mm}, Y={r.y_mm})", show)
 
 
@@ -378,7 +399,8 @@ def fano_fit(path):
 
 def measurements():
     """Registry of the single measurements: misure_singole/misure.csv (columns id, ora, nome, x_mm, y_mm, con_scansione, file, note)."""
-    return pd.read_csv(DATA / "misure_singole" / "misure.csv", keep_default_na=False)
+    table = read_table(DATA / "misure_singole" / "misure.csv")
+    return table.fillna("")
 
 
 def spectrum(ch1, ch2, n_points=5000):
