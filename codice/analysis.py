@@ -16,11 +16,9 @@ Method (as in movemin.py): moving average of CH2 (np.convolve) inside the CH1 ra
  - Q of each peak = height (prominence) / width at half height, in volts per sample;
    each peak also gets its wavelength and its width in nm.
 
-Fano fit (around each located peak): y = y0 + A (q + eps)^2 / (1 + eps^2), eps = 2 (x - x0) / Gamma, with x in nm: x0 = resonance wavelength,
-Gamma = width, q = asymmetry, A >= 0 (so that q is unique); Q = x0 / Gamma. The resonances are located on the moving average; the fit is
-always done in a window around each located peak (FANO_WINDOW widths on each side, or FANO_RANGE chosen by hand), on the raw
-CH2 data or, with FANO_ON_AVERAGE, on the moving average. A quick first fit on block-median data finds the starting values, then the
-fit is refined on all the samples of the window (FANO_ALL_SAMPLES).
+Fano fit: y = y0 + A (q + eps)^2 / (1 + eps^2), eps = 2 (x - x0) / Gamma, with x in nm (scipy curve_fit, A >= 0 so that q is
+unique, Q = x0 / Gamma). The resonances are located on the moving average; each one is fitted in a window around it, on the raw
+CH2 data or on the moving average (FANO_ON_AVERAGE).
 
 Run folders contain griglia.csv (columns indice, x_mm, y_mm, file) and one CSV (columns CH1, CH2) per point:
 that format is the one written by the earlier notebooks and by acquisition.py.
@@ -60,14 +58,8 @@ PROMINENCE_THRESHOLD = 0.1  # a peak counts if taller than this fraction of the 
 MIN_SNR = 10                # ...and than this multiple of the residual noise of the moving average...
 RUN_THRESHOLD = 0.1         # ...and than this fraction of the tallest peak of the whole run (no resonance = n.a.)
 FANO_PEAKS = 1              # Fano fit: how many resonances to fit (the tallest ones); None = all the located ones
-FANO_WINDOW = 3.0           # the fit is always done around the located peak, on the data within +- this many widths (FWHM) of it
-FANO_RANGE = None           # (min_nm, max_nm) to choose the fit window by hand; None = automatic
+FANO_WINDOW = 3.0           # each fit uses the data within +- this many widths (FWHM) around the resonance
 FANO_ON_AVERAGE = False     # False: fit the raw CH2 data; True: fit the moving average of CH2
-FANO_SLOPE = False          # True: adds a sloped baseline s * (x - x0) to the model
-FANO_ROBUST = True          # True: soft_l1 loss (resists spurious spikes); False: least squares
-FANO_POINTS = 5000          # the first, quick fit (it finds the starting values) uses the window data reduced to about this many points (block median)
-FANO_ALL_SAMPLES = True     # True: then the fit is refined on ALL the samples of the window; False: stop at the reduced data (as in the old notebook)
-FANO_DIP = False            # True: the resonances are minima of CH2 (to locate them); False: maxima
 Q_UNIT = 1e-6               # Q is shown in units of this (V per sample)
 DARK_LEVEL = 0.0            # CH2 level without light (single measurements)
 
@@ -308,154 +300,75 @@ def csv_plot(path, label=None, show=True):
 
 # ---------------------------------------------------------------- Fano fit
 
-def fano(x, y0, A, x0, gamma, q, s=0.0):
-    """Fano line shape: y0 + s*(x - x0) + A * (q + eps)^2 / (1 + eps^2), eps = 2 (x - x0) / gamma."""
+def fano(x, y0, A, x0, gamma, q):
+    """Fano line shape: y0 + A (q + eps)^2 / (1 + eps^2), eps = 2 (x - x0) / gamma."""
     eps = 2.0 * (x - x0) / gamma
-    return y0 + s * (x - x0) + A * (q + eps) ** 2 / (1.0 + eps ** 2)
+    return y0 + A * (q + eps) ** 2 / (1.0 + eps ** 2)
 
 
-def block_median(x, y, n_points):
-    """Reduce (x, y) to about n_points with a block median: removes the spurious spikes and makes the fit fast."""
-    n = max(1, len(x) // int(n_points))
-    k = len(x) // n
-    return x[:k * n].reshape(k, n).mean(axis=1), np.median(y[:k * n].reshape(k, n), axis=1)
-
-
-def fano_fit_peak(x, y, x0_guess, gamma_guess, x_all=None, y_all=None):
-    """Fano fit of one resonance with scipy's curve_fit. Stage 1 on (x, y), the data reduced for speed: it starts from several
-    values of q and keeps the best one (the Fano fit has several local minima). Stage 2, if (x_all, y_all) are given: the fit is
-    repeated on ALL the samples of the window, starting from the stage-1 result. A >= 0 is imposed: (A, q) and (-A q^2, -1/q)
-    describe the same curve, so without it q would not be unique.
-    Returns a dict with the parameters, their uncertainties, Q = x0 / Gamma and the model, or None if the fit does not converge."""
-    scale = float(gamma_guess)
-    span = float(np.max(y) - np.min(y))
-    edge = max(3, len(y) // 5)
-    y0_guess = float(np.median(np.concatenate([y[:edge], y[-edge:]])))
-    n_par = 6 if FANO_SLOPE else 5
-    f_scale = max(1.4826 * float(np.median(np.abs(y - np.median(y)))) * 0.1, span * 0.02, 1e-12)
-    options = {"bounds": ([-np.inf, 0.0, -2.0, 0.05, -50.0, -np.inf][:n_par], [np.inf, 20 * span, 2.0, 20.0, 50.0, np.inf][:n_par]),
-               "loss": "soft_l1" if FANO_ROBUST else "linear", "f_scale": f_scale,      # soft_l1: resists the spurious spikes
-               "max_nfev": 3000}
-
-    def attempt(xx, yy, p0):                              # curve_fit raises if it does not converge: that start is just skipped
+def fit_fano(x, y, x0, gamma):
+    """curve_fit of the Fano shape on (x, y), starting from a resonance at x0 with width gamma. A >= 0 is imposed ((A, q) and
+    (-A q^2, -1/q) are the same curve, so without it q would not be unique). It starts from several values of q and keeps the
+    best one, because the Fano shape has several local minima. Returns (parameters, errors) or None if it never converges."""
+    lo, hi = np.percentile(y, [5, 95])
+    edge = np.median(np.r_[y[:len(y) // 5], y[-len(y) // 5:]])
+    bounds = ([-np.inf, 0, x0 - 2 * gamma, gamma / 20, -50], [np.inf, 20 * (hi - lo), x0 + 2 * gamma, 20 * gamma, 50])
+    best = None
+    for q0 in (-3, -1, -0.3, 0.3, 1, 3):
         try:
-            return curve_fit(curve, xx, yy, p0=p0, **options)
+            p, cov = curve_fit(fano, x, y, p0=[lo, max(edge - lo, 0.1 * (hi - lo)), x0, gamma, q0], bounds=bounds,
+                               loss="soft_l1", f_scale=0.02 * (hi - lo), x_scale="jac", max_nfev=3000)   # soft_l1: resists spikes
         except RuntimeError:
-            return None
-
-    def curve(xx, *p):                                    # the Fano shape, with x normalized: the resonance is near 0 and has width ~1
-        return fano((xx - x0_guess) / scale, *p)
-
-    def cost(p):
-        r = (curve(x, *p) - y) / f_scale
-        return float(np.sum(2 * (np.sqrt(1 + r ** 2) - 1))) if FANO_ROBUST else float(np.sum(r ** 2))
-
-    floor = float(np.percentile(y, 5))                                         # the minimum of the structure
-    A_guess = max(y0_guess - floor, 0.1 * span)
-    fits = [attempt(x, y, [floor, A_guess, 0.0, 1.0, q0] + [0.0] * (n_par - 5)) for q0 in (-3.0, -1.0, -0.3, 0.3, 1.0, 3.0)]
-    fits = [fit for fit in fits if fit is not None]
-    if not fits:
-        return None
-    p, cov = min(fits, key=lambda fit: cost(fit[0]))
-    if x_all is not None:
-        refined = attempt(x_all, y_all, p)
-        if refined is not None:
-            (p, cov), x, y = refined, x_all, y_all
-    err = np.sqrt(np.diag(cov))
-    x0, gamma, s = x0_guess + scale * p[2], scale * p[3], (p[5] / scale) if n_par == 6 else 0.0
-    result = {"y0": p[0], "A": p[1], "x0": x0, "gamma": gamma, "q": p[4], "s": s,
-              "err_y0": err[0], "err_A": err[1], "err_x0": scale * err[2], "err_gamma": scale * err[3], "err_q": err[4],
-              "rms": float(np.sqrt(np.mean((curve(x, *p) - y) ** 2))), "Q": abs(x0) / gamma,
-              "model": lambda xx: fano(xx, p[0], p[1], x0, gamma, p[4], s)}
-    result["err_Q"] = result["Q"] * np.hypot(result["err_x0"] / x0 if x0 else 0.0, result["err_gamma"] / gamma)
-    return result
+            continue
+        error = np.abs(fano(x, *p) - y).sum()                       # the best start = the smallest total residual
+        if best is None or error < best[0]:
+            best = error, p, np.sqrt(np.diag(cov))
+    return best[1:] if best else None
 
 
 def fano_fit(path):
-    """Fano fit of the resonances of one CSV (CH1, CH2) inside the CH1 ramp, with the x axis in wavelength (nm).
-    The resonances are located on the moving average; each one is fitted in a window around the located peak, on the raw data (or on the moving average if FANO_ON_AVERAGE).
-    Prints the parameters, plots data + fit + residuals, and returns the list of results (one dict per resonance)."""
+    """Fano fit of the resonances of one CSV (CH1, CH2), in wavelength (nm). The FANO_PEAKS tallest resonances found on the
+    moving average are fitted one by one, each in a window of +- FANO_WINDOW widths around it, on the raw CH2 data or, with
+    FANO_ON_AVERAGE, on the moving average. Prints the parameters and plots data, fit and residuals."""
     path = run_path(path)
     ch1, ch2 = read_csv(path)
-    f = fit_ramp(ch1)
-    zone = valid_zone(f, len(ch1))
-    if zone is None:
-        print("no ramp in CH1: nothing to fit")
-        return []
-    a, b = zone
-    lam = wavelength(np.arange(len(ch2)), f)
     smooth = moving_average(ch2)
-    _, peaks, _ = analyze_point(ch1, -ch2 if FANO_DIP else ch2, -smooth if FANO_DIP else smooth)   # only to locate the resonances
+    _, peaks, f = analyze_point(ch1, ch2, smooth)
     if not peaks:
-        print("no resonance located on the moving average: lower PROMINENCE_THRESHOLD or MIN_SNR, or check FANO_DIP")
+        print("no resonance found on the moving average: lower PROMINENCE_THRESHOLD or MIN_SNR")
         return []
-    peaks.sort(key=lambda p: -p["height"])                                   # tallest first
-    chosen = peaks[:FANO_PEAKS]
-    chosen.sort(key=lambda p: p["index"])                                    # in order of position
-    print(f"{path.name}: {len(peaks)} resonances located, fitting {len(chosen)}")
-    fits = []
-    for n, p in enumerate(chosen, start=1):
-        if FANO_RANGE is not None:
-            inside = np.flatnonzero((lam >= min(FANO_RANGE)) & (lam <= max(FANO_RANGE)) & (np.arange(len(lam)) >= a) & (np.arange(len(lam)) <= b))
-            if inside.size == 0:
-                print(f"resonance {n}: FANO_RANGE is outside the ramp")
-                continue
-            ia, ib = inside[0], inside[-1]
-        else:
-            half = FANO_WINDOW * p["width"]
-            ia, ib = max(a, int(p["index"] - half)), min(b, int(p["index"] + half))
-        xw, yw = lam[ia:ib + 1], (smooth if FANO_ON_AVERAGE else ch2)[ia:ib + 1]
-        xr, yr = block_median(xw, yw, FANO_POINTS)
-        fit = fano_fit_peak(xr, yr, lam[p["index"]], p["width_nm"], *((xw, yw) if FANO_ALL_SAMPLES else (None, None)))
+    zone_start, zone_end = valid_zone(f, len(ch1))
+    data = smooth if FANO_ON_AVERAGE else ch2
+    results = []
+    for n, peak in enumerate(sorted(sorted(peaks, key=lambda p: -p["height"])[:FANO_PEAKS], key=lambda p: p["index"]), start=1):
+        half = int(FANO_WINDOW * peak["width"])
+        a, b = max(zone_start, peak["index"] - half), min(zone_end, peak["index"] + half)
+        x, y = wavelength(np.arange(a, b + 1), f), data[a:b + 1]
+        fit = fit_fano(x, y, peak["lambda_nm"], peak["width_nm"])
         if fit is None:
-            print(f"resonance {n}: the fit did not converge (try a different FANO_WINDOW or FANO_RANGE)")
+            print(f"resonance {n}: the fit did not converge")
             continue
-        fit.update(n=n, xw=xw, yw=yw, xr=xw if FANO_ALL_SAMPLES else xr, yr=yw if FANO_ALL_SAMPLES else yr)
-        fits.append(fit)
-
-    print(f"{'n':>2} {'x0 (nm)':>12} {'Gamma (nm)':>12} {'q':>9} {'A':>11} {'y0':>11} {'Q = x0/Gamma':>14} {'rms':>10}")
-    for r in fits:
-        print(f"{r['n']:>2} {r['x0']:>12.5f} {r['gamma']:>12.5g} {r['q']:>9.3f} {r['A']:>11.4g} {r['y0']:>11.4g} {r['Q']:>14.5g} {r['rms']:>10.3g}")
-    for r in fits:
-        print(f"resonance {r['n']}: x0 = {r['x0']:.5f} +- {r['err_x0']:.2g} nm | Gamma = {r['gamma']:.5g} +- {r['err_gamma']:.2g} nm | "
-              f"q = {r['q']:.3f} +- {r['err_q']:.2g} | A = {r['A']:.4g} +- {r['err_A']:.2g} | y0 = {r['y0']:.4g} +- {r['err_y0']:.2g} | "
-              f"Q = {r['Q']:.5g} +- {r['err_Q']:.2g}")
-    if not fits:
-        return fits
-
-    step = max(1, len(ch2) // 20000)
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(lam[::step], ch2[::step], color="gray", lw=0.6, alpha=0.7, label="raw CH2")
-    ax.plot(lam[::step], smooth[::step], color="red", lw=1.0, alpha=0.7, label=f"moving average (N={WINDOW})")
-    ax.axvspan(lam[a], lam[b], color="orange", alpha=0.1)
-    for r in fits:
-        ax.plot(r["xw"], r["model"](r["xw"]), color="blue", lw=2)
-        ax.annotate(str(r["n"]), (r["x0"], r["model"](np.array([r["x0"]]))[0]), textcoords="offset points", xytext=(0, 10), ha="center")
-    ax.set_xlim(LAMBDA_0 - 0.3 * (LAMBDA_1 - LAMBDA_0), LAMBDA_1 + 0.3 * (LAMBDA_1 - LAMBDA_0))
-    ax.set_xlabel("wavelength (nm)")
-    ax.set_ylabel("CH2 (V)")
-    ax.legend(loc="best")
-    plt.tight_layout()
-
-    fig, axes = plt.subplots(2, len(fits), figsize=(5.2 * len(fits), 5.5), sharex="col",
-                             gridspec_kw={"height_ratios": [3, 1]}, squeeze=False)
-    for k, r in enumerate(fits):
-        a1, a2 = axes[0, k], axes[1, k]
-        a1.plot(r["xw"][::max(1, len(r["xw"]) // 20000)], r["yw"][::max(1, len(r["xw"]) // 20000)], color="lightgray", lw=0.5, label="moving average" if FANO_ON_AVERAGE else "raw data")
-        a1.plot(r["xr"][::max(1, len(r["xr"]) // 5000)], r["yr"][::max(1, len(r["xr"]) // 5000)], "k.", ms=2, label="fitted data")
-        xx = np.linspace(r["xw"][0], r["xw"][-1], 2000)
-        a1.plot(xx, r["model"](xx), color="blue", lw=2, label="Fano fit")
-        a1.set_title(f"resonance {r['n']}: x0={r['x0']:.5g} nm, Gamma={r['gamma']:.4g} nm, q={r['q']:.2f}", fontsize=10)
-        a1.set_ylabel("CH2 (V)")
-        a1.legend(loc="best", fontsize=8)
-        sub = slice(None, None, max(1, len(r["xr"]) // 5000))
-        a2.plot(r["xr"][sub], (r["yr"] - r["model"](r["xr"]))[sub], "k.", ms=2)
-        a2.axhline(0, color="blue", lw=1)
-        a2.set_ylabel("residuals")
-        a2.set_xlabel("wavelength (nm)")
-    plt.tight_layout()
-    plt.show()
-    return fits
+        p, err = fit
+        print(f"resonance {n}: x0 = {p[2]:.5f} +- {err[2]:.2g} nm | Gamma = {p[3]:.5g} +- {err[3]:.2g} nm | q = {p[4]:.3f} +- {err[4]:.2g} | "
+              f"A = {p[1]:.4g} | y0 = {p[0]:.4g} | Q = x0/Gamma = {p[2] / p[3]:.5g}")
+        results.append({"x0": p[2], "gamma": p[3], "q": p[4], "A": p[1], "y0": p[0], "Q": p[2] / p[3], "params": p, "errors": err, "x": x, "y": y})
+    if results:
+        fig, axes = plt.subplots(2, len(results), figsize=(5.2 * len(results), 5.5), sharex="col",
+                                 gridspec_kw={"height_ratios": [3, 1]}, squeeze=False)
+        for k, r in enumerate(results):
+            sub = slice(None, None, max(1, len(r["x"]) // 5000))                  # only to draw fewer points
+            axes[0, k].plot(r["x"][sub], r["y"][sub], color="lightgray", lw=0.5, label="moving average" if FANO_ON_AVERAGE else "raw data")
+            axes[0, k].plot(r["x"][sub], fano(r["x"][sub], *r["params"]), color="blue", lw=2, label="Fano fit")
+            axes[0, k].set_title(f"x0={r['x0']:.5g} nm, Gamma={r['gamma']:.4g} nm, q={r['q']:.2f}", fontsize=10)
+            axes[0, k].set_ylabel("CH2 (V)")
+            axes[0, k].legend(loc="best", fontsize=8)
+            axes[1, k].plot(r["x"][sub], (r["y"] - fano(r["x"], *r["params"]))[sub], "k.", ms=2)
+            axes[1, k].axhline(0, color="blue", lw=1)
+            axes[1, k].set_ylabel("residuals")
+            axes[1, k].set_xlabel("wavelength (nm)")
+        plt.tight_layout()
+        plt.show()
+    return results
 
 
 # ---------------------------------------------------------------- single measurements
