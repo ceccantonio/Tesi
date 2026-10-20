@@ -46,6 +46,8 @@ VIEW = None                 # CSV file(s) of single acquisitions to plot, no run
 COMPARE = None              # ids of the single measurements to compare (e.g. [1, 2, 3], [] = all); None = skip
 REFERENCE = None            # id of the reference measurement for the ratios (None = the first one)
 RECOMPUTE = False           # True: ignore analysis.csv and read all the CSV files again
+SIMULATION = ""             # simulation file (CSV or text: wavelength or frequency in one column, the spectrum in another): drawn above the measurement in the point plots
+SIM_COLUMNS = (0, 1)        # (column of the wavelength/frequency, column of the simulated spectrum) in the SIMULATION file, counting from 0
 FANO = ""                   # CSV file to fit with a Fano line shape (e.g. "2026-10-06/run_007/point_011_x91.818_y146.526.csv"); "" = skip
 
 # ---------------------------------------------------------------- parameters of the method
@@ -317,9 +319,26 @@ def point_plot(folder, index, show=True):
     csv_plot(folder / r.file, f"Point {index} (X={r.x_mm}, Y={r.y_mm})", show)
 
 
+def read_simulation(path):
+    """Simulation file (CSV or text, e.g. a COMSOL export; the lines starting with # or % are comments) as (wavelength in nm, values),
+    sorted by wavelength. SIM_COLUMNS = (column of x, column of the spectrum). The unit of x is guessed from its size:
+    below 5 it is um, below 1000 it is THz (converted with c / f), otherwise nm."""
+    path = Path(path) if Path(path).exists() else DATA / path
+    with open(path, encoding="utf-8-sig") as f:
+        text = "\n".join(line.strip() for line in f if line.strip() and not line.lstrip().startswith(("#", "%")))
+    table = pd.read_csv(io.StringIO(text), sep=r"[,;\s]+", header=None, engine="python").apply(pd.to_numeric, errors="coerce")
+    x, y = table.iloc[:, SIM_COLUMNS[0]], table.iloc[:, SIM_COLUMNS[1]]       # a text header row becomes NaN and is dropped
+    ok = (x.notna() & y.notna()).to_numpy()
+    x, y = x.to_numpy()[ok], y.to_numpy()[ok]
+    x = x * 1000 if np.median(x) < 5 else 299792.458 / x if np.median(x) < 1000 else x
+    order = np.argsort(x)
+    return x[order], y[order]
+
+
 def csv_plot(path, label=None, show=True):
-    """Plot of ONE acquisition (any CSV with CH1, CH2: a point of a run, a single measurement...): CH1 ramp with its fit,
-    raw CH2, moving average, measurement zone and peaks, in wavelength.
+    """Plot of ONE acquisition (any CSV with CH1, CH2: a point of a run, a single measurement...): raw CH2, moving average,
+    measurement zone and peaks, in wavelength, only between LAMBDA_0 and LAMBDA_1. If SIMULATION is set, its spectrum is drawn
+    in a panel above the measurement, with the same wavelength axis.
     show=False: draw the figure without opening it yet (to open several together with one plt.show())."""
     path = run_path(path)
     ch1, ch2 = read_csv(path)
@@ -328,28 +347,32 @@ def csv_plot(path, label=None, show=True):
     if f is None:
         print("no ramp in CH1: nothing to plot")
         return
-    step = max(1, len(ch2) // 20000)
-    lam = wavelength(np.arange(len(ch2)), f)[::step]
-    fig, (a1, a2) = plt.subplots(2, 1, figsize=(10, 6.5), sharex=True, gridspec_kw={"height_ratios": [1, 2]})
-    a1.plot(lam, ch1[::step], color="tab:red", lw=1)
-    a1.axvline(LAMBDA_0, color="k", ls="--", lw=0.8, label=f"ramp start (fit) = {LAMBDA_0:g} nm")
-    a1.axvline(LAMBDA_1, color="k", ls=":", lw=0.8, label=f"ramp end (fit) = {LAMBDA_1:g} nm")
-    a1.set_ylabel("CH1 (V)")
-    a1.legend(loc="best", fontsize=8)
-    a2.plot(lam, ch2[::step], color="gray", lw=0.6, alpha=0.6, label="raw CH2")
-    a2.plot(lam, smooth[::step], color="red", lw=1.5, label=f"moving average (N={WINDOW})")
+    lam = wavelength(np.arange(len(ch2)), f)
+    inside = np.flatnonzero((lam >= LAMBDA_0) & (lam <= LAMBDA_1))[::max(1, len(ch2) // 20000)]       # only the points of the scan
+    sim = read_simulation(SIMULATION) if SIMULATION else None
+    fig, axes = plt.subplots(2 if sim else 1, 1, figsize=(10, 7 if sim else 4.5), sharex=True, squeeze=False)
+    axes = axes[:, 0]
+    a = axes[-1]
+    a.plot(lam[inside], ch2[inside], color="gray", lw=0.6, alpha=0.6, label="raw CH2")
+    a.plot(lam[inside], smooth[inside], color="red", lw=1.5, label=f"moving average (N={WINDOW})")
     zone = valid_zone(f, len(ch1))
     if zone:
-        a2.axvspan(*wavelength(zone, f), color="orange", alpha=0.12, label="measurement zone")
+        a.axvspan(*wavelength(zone, f), color="orange", alpha=0.12, label="measurement zone")
     for n, p in enumerate(peaks, start=1):
-        a2.hlines(p["level"], *wavelength([p["left"], p["right"]], f), color="blue", lw=2)
-        a2.annotate(f"{n}: {p['lambda_nm']:.2f} nm, Q={p['Q'] / Q_UNIT:.3g}", (p["lambda_nm"], smooth[p["index"]]),
-                    textcoords="offset points", xytext=(0, 9), ha="center", fontsize=9)
-    a2.set_xlim(LAMBDA_0 - 0.3 * (LAMBDA_1 - LAMBDA_0), LAMBDA_1 + 0.3 * (LAMBDA_1 - LAMBDA_0))
-    a2.set_xlabel("wavelength (nm)")
-    a2.set_ylabel("CH2 (V)")
-    a2.legend(loc="best", fontsize=8)
-    a1.set_title(f"{label or path.name}: modulation {modulation:.4f} V, {len(peaks)} peaks")
+        a.hlines(p["level"], *wavelength([p["left"], p["right"]], f), color="blue", lw=2)
+        a.annotate(f"{n}: {p['lambda_nm']:.2f} nm, Q={p['Q'] / Q_UNIT:.3g}", (p["lambda_nm"], smooth[p["index"]]),
+                   textcoords="offset points", xytext=(0, 9), ha="center", fontsize=9)
+    a.set_xlim(LAMBDA_0, LAMBDA_1)
+    a.set_xlabel("wavelength (nm)")
+    a.set_ylabel("CH2 (V)")
+    a.legend(loc="best", fontsize=8)
+    if sim:
+        x, y = sim
+        inside_sim = (x >= LAMBDA_0) & (x <= LAMBDA_1)
+        axes[0].plot(x[inside_sim], y[inside_sim], color="tab:green", lw=1.5, label=f"simulation ({Path(SIMULATION).name})")
+        axes[0].set_ylabel("simulation")
+        axes[0].legend(loc="best", fontsize=8)
+    axes[0].set_title(f"{label or path.name}: modulation {modulation:.4f} V, {len(peaks)} peaks")
     plt.tight_layout()
     if show:
         plt.show()
