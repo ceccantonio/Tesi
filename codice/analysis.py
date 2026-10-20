@@ -188,11 +188,14 @@ def analyze_run(folder, recompute=False):
 
 
 def lattice(x, y):
-    """(row, column) of every point of a serpentine path; None if it cannot be reconstructed."""
-    jumps = np.abs(np.diff(y))
-    if len(x) < 4 or jumps.max() == 0:
+    """(row, column) of every point of a serpentine path; None if it cannot be reconstructed. Works for any tilt of the sample:
+    inside a row every step is +u or -u (u = the first step), a step that is neither of them is the turn to the next row."""
+    steps = np.diff(np.column_stack([x, y]), axis=0)
+    if len(x) < 4:
         return None
-    rows = np.concatenate([[0], np.cumsum(jumps > 0.5 * jumps.max())])         # the change of row is a big jump in Y
+    u = steps[0]
+    along = (np.linalg.norm(steps - u, axis=1) < 0.3 * np.linalg.norm(u)) | (np.linalg.norm(steps + u, axis=1) < 0.3 * np.linalg.norm(u))
+    rows = np.concatenate([[0], np.cumsum(~along)])
     lengths = np.bincount(rows)
     if len(set(lengths)) != 1:
         return None
