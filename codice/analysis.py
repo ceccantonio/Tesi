@@ -187,13 +187,27 @@ def analyze_run(folder, recompute=False):
     """Modulation and Q of every point of the run (folder with griglia.csv). The table is saved in analysis.csv."""
     folder = run_path(folder)
     if (folder / "analysis.csv").exists() and not recompute:
-        return pd.read_csv(folder / "analysis.csv")
-    points = []
-    for r in read_registry(folder).itertuples():
+        try:
+            saved = pd.read_csv(folder / "analysis.csv")
+        except pd.errors.EmptyDataError:
+            saved = pd.DataFrame()
+        if "x_mm" in saved.columns and len(saved):                  # an empty or broken analysis.csv is ignored
+            return saved
+    points, missing = [], []
+    registry = read_registry(folder)
+    print(f"{folder}: {len(registry)} points in griglia.csv")
+    for r in registry.itertuples():
         if (folder / r.file).exists():
             modulation, peaks, f = analyze_point(*read_csv(folder / r.file))
             print(f"point {r.indice}: modulation {modulation:.4f} V, {len(peaks)} peaks")
             points.append((r, modulation, peaks, f))
+        else:
+            missing.append(r.file)
+    if missing:
+        print(f"{len(missing)} files listed in griglia.csv are not in the folder (first: {missing[0]})")
+    if not points:
+        print("no data file found: nothing to analyze (check the run folder and griglia.csv)")
+        return pd.DataFrame(columns=["index", "x_mm", "y_mm", "modulation_V", "Q"])
     threshold = RUN_THRESHOLD * max([p["height"] for _, _, peaks, _ in points for p in peaks], default=0)
     rows = []
     for r, modulation, peaks, f in points:
@@ -226,6 +240,9 @@ def lattice(x, y):
 
 def heatmap(table, column, label, file=None, scale=1.0, fmt="{:.2f}"):
     """Heatmap with the value written on each point: on a lattice (rows/columns of the serpentine) or at the real X, Y positions."""
+    if column not in table.columns or table[column].isna().all():
+        print(f"{column}: no valid value, heatmap not drawn")
+        return
     x, y = table["x_mm"].to_numpy(), table["y_mm"].to_numpy()
     z = table[column].to_numpy() / scale
     valid = np.isfinite(z)
