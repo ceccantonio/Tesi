@@ -73,9 +73,13 @@ def run_path(folder):
 
 
 def read_table(path):
-    """Small CSV (a registry) as a table; the lines starting with # (e.g. a description written at the top) are ignored."""
+    """Small CSV (a registry) as a table. Ignored: the lines starting with # (e.g. a description written at the top) and
+    whatever follows a # in the header line (e.g. "indice,x_mm,y_mm,file  #my description")."""
     with open(path, encoding="utf-8-sig") as f:
-        return pd.read_csv(io.StringIO("".join(line for line in f if not line.startswith("#"))))
+        lines = [line for line in f if not line.startswith("#")]
+    if lines:
+        lines[0] = lines[0].split("#")[0].rstrip() + "\n"
+    return pd.read_csv(io.StringIO("".join(lines)))
 
 
 def read_registry(folder):
@@ -93,7 +97,8 @@ def read_registry(folder):
 
 
 def read_csv(path):
-    df = pd.read_csv(path, dtype=np.float32, comment="#")                  # the lines starting with # (description) are ignored
+    df = pd.read_csv(path, dtype=np.float32, comment="#")                  # what follows a # (a description) is ignored
+    df.columns = df.columns.str.strip()                                    # "CH2  #description" would leave spaces in the name
     return df["CH1"].to_numpy(float), df["CH2"].to_numpy(float)
 
 
@@ -204,7 +209,7 @@ def analyze_run(folder, recompute=False):
         else:
             missing.append(r.file)
     if missing:
-        print(f"{len(missing)} files listed in griglia.csv are not in the folder (first: {missing[0]})")
+        print(f"{len(missing)} files listed in griglia.csv are not in the folder (first one looked for: {folder / missing[0]})")
     if not points:
         print("no data file found: nothing to analyze (check the run folder and griglia.csv)")
         return pd.DataFrame(columns=["index", "x_mm", "y_mm", "modulation_V", "Q"])
