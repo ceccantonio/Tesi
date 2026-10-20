@@ -11,6 +11,7 @@ from initialization import init
 
 CENTER_X, CENTER_Y = 91.814, 146.508   # mm, center of the membrane
 SIDE_UM = 500.0                        # the points go from -side/2 to +side/2 (edges included)
+DESCRIPTION = ""            # what this run is (sample, setup...): saved in the run folder as description.txt, shown by analysis.py
 N_X, N_Y = 8, 8
 RIGHT_IS_X_INCREASING = True           # "right" = increasing X
 DOWN_IS_Y_DECREASING = True            # "down" = decreasing Y; the first row is the top one
@@ -37,7 +38,7 @@ def main():
     if input(f"Move the motors and run {len(points)} scans? type 'yes': ").strip().lower() != "yes":
         return
     laser, scope, motors = init()
-    print("Data in", scan_points(points, laser, scope, motors))
+    print("Data in", scan_points(points, laser, scope, motors, description=DESCRIPTION))
 
 
 if __name__ == "__main__":

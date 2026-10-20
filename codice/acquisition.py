@@ -42,10 +42,13 @@ def new_folder(prefix="run"):
     return folder
 
 
-def scan_points(points, laser, scope, motors, settle=1.0):
+def scan_points(points, laser, scope, motors, settle=1.0, description=""):
     """For each (x, y): move the motors, do one scan, save one CSV. Registry: griglia.csv (indice,x_mm,y_mm,file,
-    the same format as the earlier notebooks). Returns the folder."""
+    the same format as the earlier notebooks). description is written in description.txt (a note about the run, never parsed).
+    Returns the folder."""
     folder = new_folder("run")
+    if description:
+        (folder / "description.txt").write_text(description + "\n", encoding="utf-8")
     registry = folder / "griglia.csv"
     registry.write_text("indice,x_mm,y_mm,file\n")
     try:

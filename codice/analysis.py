@@ -82,6 +82,12 @@ def read_table(path):
     return pd.read_csv(io.StringIO("".join(lines)))
 
 
+def description(folder):
+    """Text of description.txt in the run folder (what the run is; written by the acquisition scripts, never parsed), or ""."""
+    path = Path(folder) / "description.txt"
+    return path.read_text(encoding="utf-8").strip() if path.exists() else ""
+
+
 def read_registry(folder):
     """griglia.csv of a run as a table with the columns indice, x_mm, y_mm, file. Tolerant to a BOM, spaces, capital letters and to
     another name of the file column (it is then the column whose values end with .csv)."""
@@ -201,6 +207,8 @@ def analyze_run(folder, recompute=False):
     points, missing = [], []
     registry = read_registry(folder)
     print(f"{folder}: {len(registry)} points in griglia.csv")
+    if description(folder):
+        print("description:", description(folder))
     for r in registry.itertuples():
         if (folder / r.file).exists():
             modulation, peaks, f = analyze_point(*read_csv(folder / r.file))
@@ -209,7 +217,10 @@ def analyze_run(folder, recompute=False):
         else:
             missing.append(r.file)
     if missing:
-        print(f"{len(missing)} files listed in griglia.csv are not in the folder (first one looked for: {folder / missing[0]})")
+        present = sorted(q.name for q in folder.glob("*.csv") if q.name not in ("griglia.csv", "analysis.csv"))[:3]
+        print(f"{len(missing)} files listed in griglia.csv are not in the folder.")
+        print(f"  first one looked for: {folder / missing[0]}")
+        print(f"  CSV files actually in the folder: {present if present else 'none'}")
     if not points:
         print("no data file found: nothing to analyze (check the run folder and griglia.csv)")
         return pd.DataFrame(columns=["index", "x_mm", "y_mm", "modulation_V", "Q"])
@@ -243,7 +254,7 @@ def lattice(x, y):
     return rows, columns
 
 
-def heatmap(table, column, label, file=None, scale=1.0, fmt="{:.2f}"):
+def heatmap(table, column, label, file=None, scale=1.0, fmt="{:.2f}", subtitle=""):
     """Heatmap with the value written on each point: on a lattice (rows/columns of the serpentine) or at the real X, Y positions."""
     if column not in table.columns or table[column].isna().all():
         print(f"{column}: no valid value, heatmap not drawn")
@@ -281,7 +292,7 @@ def heatmap(table, column, label, file=None, scale=1.0, fmt="{:.2f}"):
         ax.text(xi, yi, fmt.format(zi) if np.isfinite(zi) else "n.a.", ha="center", va="center", fontsize=9,
                 color="gray" if not np.isfinite(zi) else "black" if norm(zi) > 0.55 else "white")
     fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), ax=ax, label=label)
-    ax.set_title(label)
+    ax.set_title(label + ("\n" + subtitle if subtitle else ""))
     plt.tight_layout()
     if file:
         fig.savefig(file, dpi=200)
@@ -294,9 +305,9 @@ def run_heatmaps(folder, recompute=False):
     folder = run_path(folder)
     table = analyze_run(folder, recompute)
     heatmap(table, "modulation_V", "modulation amplitude: max - min of the CH2 moving average in the ramp (V)",
-            folder / "heatmap_modulation.png", fmt="{:.3f}")
+            folder / "heatmap_modulation.png", fmt="{:.3f}", subtitle=description(folder))
     heatmap(table, "Q", f"quality factor Q = height / width  [{Q_UNIT:g} V per sample]",
-            folder / "heatmap_quality_factor.png", scale=Q_UNIT)
+            folder / "heatmap_quality_factor.png", scale=Q_UNIT, subtitle=description(folder))
 
 
 def point_plot(folder, index, show=True):

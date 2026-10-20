@@ -13,6 +13,7 @@ from initialization import init
 FIRST_X = None                # <-- X of the center of the first membrane (top left), in mm
 FIRST_Y = 133.978             # Y of the center of the first membrane
 FIRST_ROW_END_Y = 134.078     # Y of the center of the last membrane of the first row (gives the tilt)
+DESCRIPTION = ""            # what this run is (sample, setup...): saved in the run folder as description.txt, shown by analysis.py
 N_X, N_Y = 11, 11             # membranes along X and along Y
 PITCH = 0.30                  # mm between neighbouring membranes
 RIGHT_IS_X_INCREASING = True  # "right" = increasing X
@@ -51,7 +52,7 @@ def main():
     if input(f"Move the motors and run {len(points)} scans? type 'yes': ").strip().lower() != "yes":
         return
     laser, scope, motors = init()
-    print("Data in", scan_points(points, laser, scope, motors))
+    print("Data in", scan_points(points, laser, scope, motors, description=DESCRIPTION))
 
 
 if __name__ == "__main__":
