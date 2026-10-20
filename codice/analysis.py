@@ -33,7 +33,7 @@ import numpy as np
 import pandas as pd
 from matplotlib.colors import Normalize
 from matplotlib.patches import Rectangle
-from scipy.optimize import least_squares
+from scipy.optimize import curve_fit, least_squares
 from scipy.signal import fftconvolve, find_peaks, peak_widths
 
 DATA = Path(__file__).resolve().parent.parent / "Chiara_Bru" / "runs_oscilloscope"
@@ -322,51 +322,50 @@ def block_median(x, y, n_points):
 
 
 def fano_fit_peak(x, y, x0_guess, gamma_guess, x_all=None, y_all=None):
-    """Fano fit of one resonance. Stage 1 on (x, y), the data reduced for speed: starts from several values of q and keeps the best
-    one (the Fano fit has several local minima). Stage 2, if (x_all, y_all) are given: the fit is refined on ALL the raw samples,
-    starting from the stage-1 result. A >= 0 is imposed: (A, q) and (-A q^2, -1/q) describe the same curve, so without it q
-    would not be unique. Returns a dict with the parameters, their uncertainties, Q = x0 / Gamma and the model."""
+    """Fano fit of one resonance with scipy's curve_fit. Stage 1 on (x, y), the data reduced for speed: it starts from several
+    values of q and keeps the best one (the Fano fit has several local minima). Stage 2, if (x_all, y_all) are given: the fit is
+    repeated on ALL the samples of the window, starting from the stage-1 result. A >= 0 is imposed: (A, q) and (-A q^2, -1/q)
+    describe the same curve, so without it q would not be unique.
+    Returns a dict with the parameters, their uncertainties, Q = x0 / Gamma and the model, or None if the fit does not converge."""
     scale = float(gamma_guess)
     span = float(np.max(y) - np.min(y))
     edge = max(3, len(y) // 5)
     y0_guess = float(np.median(np.concatenate([y[:edge], y[-edge:]])))
-    slope = bool(FANO_SLOPE)
-    lower = [-np.inf, 0.0, -2.0, 0.05, -50.0] + ([-np.inf] if slope else [])
-    upper = [np.inf, 20 * span, 2.0, 20.0, 50.0] + ([np.inf] if slope else [])
+    n_par = 6 if FANO_SLOPE else 5
     f_scale = max(1.4826 * float(np.median(np.abs(y - np.median(y)))) * 0.1, span * 0.02, 1e-12)
+    options = {"bounds": ([-np.inf, 0.0, -2.0, 0.05, -50.0, -np.inf][:n_par], [np.inf, 20 * span, 2.0, 20.0, 50.0, np.inf][:n_par]),
+               "loss": "soft_l1" if FANO_ROBUST else "linear", "f_scale": f_scale,      # soft_l1: resists the spurious spikes
+               "max_nfev": 3000}
+
+    def attempt(xx, yy, p0):                              # curve_fit raises if it does not converge: that start is just skipped
+        try:
+            return curve_fit(curve, xx, yy, p0=p0, **options)
+        except RuntimeError:
+            return None
+
+    def curve(xx, *p):                                    # the Fano shape, with x normalized: the resonance is near 0 and has width ~1
+        return fano((xx - x0_guess) / scale, *p)
+
+    def cost(p):
+        r = (curve(x, *p) - y) / f_scale
+        return float(np.sum(2 * (np.sqrt(1 + r ** 2) - 1))) if FANO_ROBUST else float(np.sum(r ** 2))
+
     floor = float(np.percentile(y, 5))                                         # the minimum of the structure
     A_guess = max(y0_guess - floor, 0.1 * span)
-
-    def model(p, xx):                                                            # xx normalized: the resonance is near 0, width ~1
-        return fano((xx - x0_guess) / scale, p[0], p[1], p[2], p[3], p[4], p[5] if slope else 0.0)
-
-    def jacobian(p, xx):                                                         # analytic: much faster than finite differences
-        eps = 2.0 * ((xx - x0_guess) / scale - p[2]) / p[3]
-        den = 1.0 + eps ** 2
-        d_eps = 2.0 * (p[4] + eps) * (1.0 - p[4] * eps) / den ** 2             # d[(q + eps)^2 / (1 + eps^2)] / d eps
-        columns = [np.ones_like(eps), (p[4] + eps) ** 2 / den, p[1] * d_eps * (-2.0 / p[3]) - (p[5] if slope else 0.0),
-                   p[1] * d_eps * (-eps / p[3]), 2.0 * p[1] * (p[4] + eps) / den]
-        if slope:
-            columns.append((xx - x0_guess) / scale - p[2])
-        return np.column_stack(columns)
-
-    def solve(xx, yy, starts):
-        residuals = lambda p: model(p, xx) - yy
-        fits = [least_squares(residuals, p0, jac=lambda p: jacobian(p, xx), bounds=(lower, upper),
-                              loss="soft_l1" if FANO_ROBUST else "linear", f_scale=f_scale) for p0 in starts]
-        return min(fits, key=lambda fit: fit.cost), residuals
-
-    best, residuals = solve(x, y, [[floor, A_guess, 0.0, 1.0, q0] + ([0.0] if slope else []) for q0 in (-3.0, -1.0, -0.3, 0.3, 1.0, 3.0)])
+    fits = [attempt(x, y, [floor, A_guess, 0.0, 1.0, q0] + [0.0] * (n_par - 5)) for q0 in (-3.0, -1.0, -0.3, 0.3, 1.0, 3.0)]
+    fits = [fit for fit in fits if fit is not None]
+    if not fits:
+        return None
+    p, cov = min(fits, key=lambda fit: cost(fit[0]))
     if x_all is not None:
-        x, y = x_all, y_all
-        best, residuals = solve(x, y, [best.x])
-    p = best.x
-    sigma2 = float(np.sum(residuals(p) ** 2)) / max(1, len(y) - len(p))
-    err = np.sqrt(np.clip(np.diag(np.linalg.pinv(best.jac.T @ best.jac) * sigma2), 0, None))
-    x0, gamma, s = x0_guess + scale * p[2], scale * p[3], (p[5] / scale) if slope else 0.0
+        refined = attempt(x_all, y_all, p)
+        if refined is not None:
+            (p, cov), x, y = refined, x_all, y_all
+    err = np.sqrt(np.diag(cov))
+    x0, gamma, s = x0_guess + scale * p[2], scale * p[3], (p[5] / scale) if n_par == 6 else 0.0
     result = {"y0": p[0], "A": p[1], "x0": x0, "gamma": gamma, "q": p[4], "s": s,
               "err_y0": err[0], "err_A": err[1], "err_x0": scale * err[2], "err_gamma": scale * err[3], "err_q": err[4],
-              "rms": float(np.sqrt(np.mean(residuals(p) ** 2))), "Q": abs(x0) / gamma,
+              "rms": float(np.sqrt(np.mean((curve(x, *p) - y) ** 2))), "Q": abs(x0) / gamma,
               "model": lambda xx: fano(xx, p[0], p[1], x0, gamma, p[4], s)}
     result["err_Q"] = result["Q"] * np.hypot(result["err_x0"] / x0 if x0 else 0.0, result["err_gamma"] / gamma)
     return result
@@ -408,6 +407,9 @@ def fano_fit(path):
         xw, yw = lam[ia:ib + 1], (smooth if FANO_ON_AVERAGE else ch2)[ia:ib + 1]
         xr, yr = block_median(xw, yw, FANO_POINTS)
         fit = fano_fit_peak(xr, yr, lam[p["index"]], p["width_nm"], *((xw, yw) if FANO_ALL_SAMPLES else (None, None)))
+        if fit is None:
+            print(f"resonance {n}: the fit did not converge (try a different FANO_WINDOW or FANO_RANGE)")
+            continue
         fit.update(n=n, xw=xw, yw=yw, xr=xw if FANO_ALL_SAMPLES else xr, yr=yw if FANO_ALL_SAMPLES else yr)
         fits.append(fit)
 
