@@ -335,6 +335,15 @@ def read_simulation(path):
     return x[order], y[order]
 
 
+def draw_simulation(ax, xmin=LAMBDA_0, xmax=LAMBDA_1):
+    """Draws the SIMULATION spectrum between xmin and xmax (nm) in the panel ax."""
+    x, y = read_simulation(SIMULATION)
+    inside = (x >= xmin) & (x <= xmax)
+    ax.plot(x[inside], y[inside], color="tab:green", lw=1.5, label=f"simulation ({Path(SIMULATION).name})")
+    ax.set_ylabel("simulation")
+    ax.legend(loc="best", fontsize=8)
+
+
 def csv_plot(path, label=None, show=True):
     """Plot of ONE acquisition (any CSV with CH1, CH2: a point of a run, a single measurement...): raw CH2, moving average,
     measurement zone and peaks, in wavelength, only between LAMBDA_0 and LAMBDA_1. If SIMULATION is set, its spectrum is drawn
@@ -349,8 +358,7 @@ def csv_plot(path, label=None, show=True):
         return
     lam = wavelength(np.arange(len(ch2)), f)
     inside = np.flatnonzero((lam >= LAMBDA_0) & (lam <= LAMBDA_1))[::max(1, len(ch2) // 20000)]       # only the points of the scan
-    sim = read_simulation(SIMULATION) if SIMULATION else None
-    fig, axes = plt.subplots(2 if sim else 1, 1, figsize=(10, 7 if sim else 4.5), sharex=True, squeeze=False)
+    fig, axes = plt.subplots(2 if SIMULATION else 1, 1, figsize=(10, 7 if SIMULATION else 4.5), sharex=True, squeeze=False)
     axes = axes[:, 0]
     a = axes[-1]
     a.plot(lam[inside], ch2[inside], color="gray", lw=0.6, alpha=0.6, label="raw CH2")
@@ -366,12 +374,8 @@ def csv_plot(path, label=None, show=True):
     a.set_xlabel("wavelength (nm)")
     a.set_ylabel("CH2 (V)")
     a.legend(loc="best", fontsize=8)
-    if sim:
-        x, y = sim
-        inside_sim = (x >= LAMBDA_0) & (x <= LAMBDA_1)
-        axes[0].plot(x[inside_sim], y[inside_sim], color="tab:green", lw=1.5, label=f"simulation ({Path(SIMULATION).name})")
-        axes[0].set_ylabel("simulation")
-        axes[0].legend(loc="best", fontsize=8)
+    if SIMULATION:
+        draw_simulation(axes[0])
     axes[0].set_title(f"{label or path.name}: modulation {modulation:.4f} V, {len(peaks)} peaks")
     plt.tight_layout()
     if show:
@@ -435,7 +439,11 @@ def fano_fit(path):
     if results:
         lam_all = wavelength(np.arange(len(ch2)), f)
         inside = np.flatnonzero((lam_all >= LAMBDA_0) & (lam_all <= LAMBDA_1))[::max(1, len(ch2) // 20000)]   # only the points of the scan
-        fig, ax = plt.subplots(figsize=(10, 4))                                   # 1) the whole scan, with the fit of every resonance
+        fig, axes = plt.subplots(2 if SIMULATION else 1, 1, figsize=(10, 6.5 if SIMULATION else 4), sharex=True, squeeze=False)
+        axes = axes[:, 0]                                                         # 1) the whole scan, with the fit of every resonance
+        ax = axes[-1]
+        if SIMULATION:
+            draw_simulation(axes[0])                                              # the simulation above
         ax.plot(lam_all[inside], ch2[inside], color="gray", lw=0.6, alpha=0.7, label="raw CH2")
         ax.plot(lam_all[inside], smooth[inside], color="red", lw=1.0, alpha=0.7, label=f"moving average (N={WINDOW})")
         ax.axvspan(*wavelength((zone_start, zone_end), f), color="orange", alpha=0.1, label="measurement zone")
@@ -452,12 +460,16 @@ def fano_fit(path):
             n = max(1, len(r["x"]) // 5000)                                       # block median (as in the old notebook), only to draw fewer points
             m = len(r["x"]) // n
             xb, yb = r["x"][:m * n].reshape(m, n).mean(axis=1), np.median(r["y"][:m * n].reshape(m, n), axis=1)
-            fig, (a1, a2) = plt.subplots(2, 1, figsize=(7, 5.5), sharex=True, gridspec_kw={"height_ratios": [3, 1]})
+            fig, axes = plt.subplots(3 if SIMULATION else 2, 1, figsize=(7, 7.5 if SIMULATION else 5.5), sharex=True,
+                                     gridspec_kw={"height_ratios": [2, 3, 1] if SIMULATION else [3, 1]})
+            a1, a2 = axes[-2], axes[-1]
+            if SIMULATION:
+                draw_simulation(axes[0], r["x"][0], r["x"][-1])                   # the simulation above, same wavelengths as the window
             a1.plot(r["x"], r["y"], color="lightgray", lw=0.5, label="moving average" if FANO_ON_AVERAGE else "raw data")
             a1.plot(xb, yb, "k.", ms=2, label="block median")
             xx = np.linspace(r["x"][0], r["x"][-1], 2000)
             a1.plot(xx, fano(xx, *r["params"]), color="blue", lw=2, label="Fano fit")
-            a1.set_title(f"resonance {k + 1}: x0={r['x0']:.5g} nm, Gamma={r['gamma']:.4g} nm, q={r['q']:.2f}", fontsize=10)
+            axes[0].set_title(f"resonance {k + 1}: x0={r['x0']:.5g} nm, Gamma={r['gamma']:.4g} nm, q={r['q']:.2f}", fontsize=10)
             a1.set_ylabel("CH2 (V)")
             a1.legend(loc="best", fontsize=8)
             a2.plot(xb, yb - fano(xb, *r["params"]), "k.", ms=2)
