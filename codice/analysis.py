@@ -433,15 +433,16 @@ def fano_fit(path):
               f"A = {p[1]:.4g} | y0 = {p[0]:.4g} | Q = x0/Gamma = {p[2] / p[3]:.5g}")
         results.append({"x0": p[2], "gamma": p[3], "q": p[4], "A": p[1], "y0": p[0], "Q": p[2] / p[3], "params": p, "errors": err, "x": x, "y": y})
     if results:
-        step = max(1, len(ch2) // 20000)                                          # only to draw fewer points
-        lam_all = wavelength(np.arange(len(ch2)), f)[::step]
-        fig, ax = plt.subplots(figsize=(10, 4))                                   # 1) the whole record, with the fit of every resonance
-        ax.plot(lam_all, ch2[::step], color="gray", lw=0.6, alpha=0.7, label="raw CH2")
-        ax.plot(lam_all, smooth[::step], color="red", lw=1.0, alpha=0.7, label=f"moving average (N={WINDOW})")
+        lam_all = wavelength(np.arange(len(ch2)), f)
+        inside = np.flatnonzero((lam_all >= LAMBDA_0) & (lam_all <= LAMBDA_1))[::max(1, len(ch2) // 20000)]   # only the points of the scan
+        fig, ax = plt.subplots(figsize=(10, 4))                                   # 1) the whole scan, with the fit of every resonance
+        ax.plot(lam_all[inside], ch2[inside], color="gray", lw=0.6, alpha=0.7, label="raw CH2")
+        ax.plot(lam_all[inside], smooth[inside], color="red", lw=1.0, alpha=0.7, label=f"moving average (N={WINDOW})")
         ax.axvspan(*wavelength((zone_start, zone_end), f), color="orange", alpha=0.1, label="measurement zone")
         for k, r in enumerate(results):
             ax.plot(r["x"], fano(r["x"], *r["params"]), color="blue", lw=2, label="Fano fit" if k == 0 else None)
             ax.annotate(str(k + 1), (r["x0"], fano(r["x0"], *r["params"])), textcoords="offset points", xytext=(0, 10), ha="center")
+        ax.set_xlim(LAMBDA_0, LAMBDA_1)
         ax.set_xlabel("wavelength (nm)")
         ax.set_ylabel("CH2 (V)")
         ax.legend(loc="best")
