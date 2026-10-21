@@ -1,6 +1,7 @@
 """Data analysis: modulation amplitude, quality factor, heatmaps and comparison of single measurements.
 
     python analysis.py run 2026-10-06/run_007       # modulation and Q of every point -> analysis.csv + two heatmaps
+    python analysis.py mosaic 2026-10-06/run_007    # ONE png with the spectra of all the membranes, each in the position of its membrane
     python analysis.py point 2026-10-06/run_007 3 12 40   # detail plots of some points of a run (no heatmaps)
     python analysis.py view misure_singole/m004_x.csv     # plot of single acquisitions (CSV files), no run folder needed
     python analysis.py fano 2026-10-06/run_007/point_011_x91.818_y146.526.csv   # Fano fit of the resonances of one CSV
@@ -48,6 +49,8 @@ REFERENCE = None            # id of the reference measurement for the ratios (No
 RECOMPUTE = False           # True: ignore analysis.csv and read all the CSV files again
 SIMULATION = ""             # simulation file (CSV or text: wavelength or frequency in one column, the spectrum in another): drawn above the measurement in the point plots
 SIM_COLUMNS = (0, 1)        # (column of the wavelength/frequency, column of the simulated spectrum) in the SIMULATION file, counting from 0
+MOSAIC = False              # True: also draw ONE png with the spectra (1520-1570 nm) of all the membranes of RUN, each one in the position of its membrane
+TRANSMISSION_REF = ""       # CSV of the transmission reference (the scan without the sample): if set, every measured spectrum is divided by it, so you get T like in the simulation. A bare name (e.g. "reference.csv") is looked for in the folder of each run first, so co-pol and cross-pol runs can each have their own reference
 FANO = ""                   # CSV file to fit with a Fano line shape (e.g. "2026-10-06/run_007/point_011_x91.818_y146.526.csv"); "" = skip
 
 # ---------------------------------------------------------------- parameters of the method
@@ -108,6 +111,49 @@ def read_csv(path):
     df = pd.read_csv(path, dtype=np.float32, comment="#")                  # what follows a # (a description) is ignored
     df.columns = df.columns.str.strip()                                    # "CH2  #description" would leave spaces in the name
     return df["CH1"].to_numpy(float), df["CH2"].to_numpy(float)
+
+
+def suffix():
+    """"" or "_T_<reference name>": added to the names of the results, so that the ones computed with a transmission reference do not mix with the others."""
+    return "_T_" + Path(TRANSMISSION_REF).stem if TRANSMISSION_REF else ""
+
+
+def unit():
+    return "T" if TRANSMISSION_REF else "V"
+
+
+def signal_name():
+    return "transmission T" if TRANSMISSION_REF else "CH2 (V)"
+
+
+_reference = {}
+
+
+def reference_spectrum(folder):
+    """(wavelength, spectrum) of the transmission reference of the run in folder (or (None, level) if it has no scan); None if TRANSMISSION_REF is not set.
+    The file is the one called TRANSMISSION_REF inside the run folder, if it exists (each run has its own reference), otherwise the path as written."""
+    if not TRANSMISSION_REF:
+        return None
+    inside = Path(folder) / TRANSMISSION_REF
+    path = inside if not Path(TRANSMISSION_REF).is_absolute() and inside.exists() else run_path(TRANSMISSION_REF)
+    if path not in _reference:
+        ch1, ch2 = read_csv(path)
+        _reference[path] = spectrum(ch1, ch2) if fit_ramp(ch1) is not None else (None, np.median(ch2) - DARK_LEVEL)
+    return _reference[path]
+
+
+def load_point(path):
+    """CH1 and CH2 of one acquisition. With TRANSMISSION_REF, CH2 is divided by the reference measurement at the same wavelength: T."""
+    ch1, ch2 = read_csv(path)
+    ref = reference_spectrum(Path(path).parent)
+    f = fit_ramp(ch1) if ref is not None else None
+    if ref is None or (ref[0] is not None and f is None):
+        return ch1, ch2
+    if ref[0] is None:
+        den = ref[1]
+    else:
+        den = np.maximum(np.interp(wavelength(np.arange(len(ch2)), f), *ref), 0.02 * ref[1].max())   # where the reference is dark T is not defined
+    return ch1, (ch2 - DARK_LEVEL) / den
 
 
 def moving_average(y, n=WINDOW):
@@ -199,23 +245,26 @@ def analyze_point(ch1, ch2, smooth=None):
 def analyze_run(folder, recompute=False):
     """Modulation and Q of every point of the run (folder with griglia.csv). The table is saved in analysis.csv."""
     folder = run_path(folder)
-    if (folder / "analysis.csv").exists() and not recompute:
+    cache = folder / f"analysis{suffix()}.csv"
+    if cache.exists() and not recompute:
         try:
-            saved = pd.read_csv(folder / "analysis.csv")
+            saved = pd.read_csv(cache)
         except pd.errors.EmptyDataError:
             saved = pd.DataFrame()
         if "x_mm" in saved.columns and len(saved):                  # an empty or broken analysis.csv is ignored
             return saved
-    points, missing = [], []
+    points, missing, spectra = [], [], {}
     registry = read_registry(folder)
     print(f"{folder}: {len(registry)} points in griglia.csv")
     if description(folder):
         print("description:", description(folder))
     for r in registry.itertuples():
         if (folder / r.file).exists():
-            modulation, peaks, f = analyze_point(*read_csv(folder / r.file))
-            print(f"point {r.indice}: modulation {modulation:.4f} V, {len(peaks)} peaks")
+            ch1, ch2 = load_point(folder / r.file)
+            modulation, peaks, f = analyze_point(ch1, ch2)
+            print(f"point {r.indice}: modulation {modulation:.4f} {unit()}, {len(peaks)} peaks")
             points.append((r, modulation, peaks, f))
+            spectra[r.indice] = point_spectrum(ch1, ch2)                       # for the mosaic, in the same pass (the files are big)
         else:
             missing.append(r.file)
     if missing:
@@ -236,7 +285,8 @@ def analyze_run(folder, recompute=False):
                      "lambda_nm": best["lambda_nm"] if best else np.nan, "width_nm": best["width_nm"] if best else np.nan,
                      "ramp_start": f[0] if f else np.nan, "ramp_end": f[1] if f else np.nan})
     table = pd.DataFrame(rows)
-    table.to_csv(folder / "analysis.csv", index=False)
+    table.to_csv(cache, index=False)
+    np.savez(folder / f"spectra{suffix()}.npz", index=list(spectra), spectra=np.array(list(spectra.values())))
     return table
 
 
@@ -256,6 +306,40 @@ def lattice(x, y):
     return rows, columns
 
 
+_checked = set()
+
+
+def layout(x, y):
+    """Where each point goes in a grid drawn like the real sample: (row, column, n_rows, n_columns), or None if the points are not a
+    regular serpentine. It also checks that the grid agrees with the real X, Y positions (position = origin + column * u + row * v,
+    fitted on all the points) and prints the check once. The grid is oriented so that columns grow towards +X and rows towards -Y (down)."""
+    rc = lattice(x, y)
+    key = (len(x), round(float(np.sum(x) + np.sum(y)), 4))
+    if rc is None:
+        if key not in _checked:
+            print("lattice check: the points are NOT a regular serpentine (missing or out-of-order points): drawn at the real X, Y positions")
+        _checked.add(key)
+        return None
+    rows, columns = rc
+    design = np.column_stack([np.ones(len(x)), columns, rows])
+    coef = np.linalg.lstsq(design, np.column_stack([x, y]), rcond=None)[0]
+    u, v = coef[1], coef[2]
+    error = np.hypot(*(np.column_stack([x, y]) - design @ coef).T).max()
+    flip_columns, flip_rows = u[0] < 0, v[1] > 0
+    if key not in _checked:
+        print(f"lattice check: {columns.max() + 1} columns x {rows.max() + 1} rows, pitch {np.linalg.norm(u):.3f} x {np.linalg.norm(v):.3f} mm, "
+              f"tilt {np.degrees(np.arctan2(u[1], u[0])):+.2f} deg, largest distance of a point from the ideal lattice {error * 1000:.1f} um")
+        print(f"  the column index grows towards {'-X' if flip_columns else '+X'} and the row index towards {'+Y' if flip_rows else '-Y'} in the real positions: "
+              f"grid drawn with columns towards +X (right) and rows towards -Y (down)" + (" after flipping" if flip_columns or flip_rows else ""))
+        if error > 0.2 * min(np.linalg.norm(u), np.linalg.norm(v)):
+            print("  WARNING: some points are far from the ideal lattice: the picture may not match the real positions")
+        else:
+            print("  OK: the picture matches the real positions")
+    _checked.add(key)
+    n_rows, n_columns = rows.max() + 1, columns.max() + 1
+    return (n_rows - 1 - rows if flip_rows else rows), (n_columns - 1 - columns if flip_columns else columns), n_rows, n_columns
+
+
 def heatmap(table, column, label, file=None, scale=1.0, fmt="{:.2f}", subtitle=""):
     """Heatmap with the value written on each point: on a lattice (rows/columns of the serpentine) or at the real X, Y positions."""
     if column not in table.columns or table[column].isna().all():
@@ -269,15 +353,15 @@ def heatmap(table, column, label, file=None, scale=1.0, fmt="{:.2f}", subtitle="
         return
     norm, cmap = Normalize(z[valid].min(), z[valid].max()), plt.get_cmap("viridis")
     fig, ax = plt.subplots(figsize=(9, 7))
-    rc = lattice(x, y)
-    if rc is not None:
-        rows, columns = rc
-        grid = np.full((rows.max() + 1, columns.max() + 1), np.nan)
+    lay = layout(x, y)
+    if lay is not None:
+        rows, columns, n_rows, n_columns = lay
+        grid = np.full((n_rows, n_columns), np.nan)
         grid[rows, columns] = z
         ax.imshow(np.ma.masked_invalid(grid), cmap=cmap, norm=norm, origin="upper")
         cx, cy = columns, rows
-        ax.set_xlabel("column (along the first row)")
-        ax.set_ylabel("row (from the top)")
+        ax.set_xlabel("column (towards +X)")
+        ax.set_ylabel("row (towards -Y, down)")
     else:
         d = np.hypot(x[:, None] - x[None, :], y[:, None] - y[None, :])
         pitch = d[d > 0].min() if len(x) > 1 else 0.3
@@ -306,10 +390,69 @@ def run_heatmaps(folder, recompute=False):
     """Heatmaps of the modulation and of the quality factor of a run."""
     folder = run_path(folder)
     table = analyze_run(folder, recompute)
-    heatmap(table, "modulation_V", "modulation amplitude: max - min of the CH2 moving average in the ramp (V)",
-            folder / "heatmap_modulation.png", fmt="{:.3f}", subtitle=description(folder))
-    heatmap(table, "Q", f"quality factor Q = height / width  [{Q_UNIT:g} V per sample]",
-            folder / "heatmap_quality_factor.png", scale=Q_UNIT, subtitle=description(folder))
+    heatmap(table, "modulation_V", f"modulation amplitude: max - min of the moving average in the ramp ({unit()})",
+            folder / f"heatmap_modulation{suffix()}.png", fmt="{:.3f}", subtitle=description(folder))
+    heatmap(table, "Q", f"quality factor Q = height / width  [{Q_UNIT:g} {unit()} per sample]",
+            folder / f"heatmap_quality_factor{suffix()}.png", scale=Q_UNIT, subtitle=description(folder))
+
+
+LAM_GRID = np.linspace(LAMBDA_0, LAMBDA_1, 501)
+
+
+def point_spectrum(ch1, ch2):
+    """CH2 (or T) of one acquisition on LAM_GRID, from the ramp fit (NaN if there is no ramp)."""
+    if fit_ramp(ch1) is None:
+        return np.full(len(LAM_GRID), np.nan)
+    return np.interp(LAM_GRID, *spectrum(ch1, ch2))
+
+
+def run_spectra(folder, recompute=False):
+    """(indices, spectra on LAM_GRID) of the points of a run, cached in spectra.npz (analyze_run writes it in the same pass)."""
+    folder = run_path(folder)
+    cache = folder / f"spectra{suffix()}.npz"
+    if cache.exists() and not recompute:
+        saved = np.load(cache)
+        return saved["index"], saved["spectra"]
+    index, spectra = [], []
+    for r in read_registry(folder).itertuples():
+        if (folder / r.file).exists():
+            index.append(r.indice)
+            spectra.append(point_spectrum(*load_point(folder / r.file)))
+            print(f"spectrum of point {r.indice}")
+    np.savez(cache, index=index, spectra=np.array(spectra))
+    return np.array(index), np.array(spectra)
+
+
+def mosaic(folder, recompute=False):
+    """ONE png with the spectrum (LAMBDA_0 to LAMBDA_1) of every membrane, each one in the position of its membrane: the top left of the
+    png is the top left of the sample (same orientation as the heatmaps). Same vertical scale everywhere."""
+    folder = run_path(folder)
+    index, spectra = run_spectra(folder, recompute)
+    registry = read_registry(folder).set_index("indice").loc[index]
+    lay = layout(registry["x_mm"].to_numpy(), registry["y_mm"].to_numpy())
+    if lay is None or len(index) == 0:
+        print("mosaic: the points are not a regular lattice (or there is no data): the spectra cannot be placed")
+        return
+    rows, columns, n_rows, n_columns = lay
+    low, high = np.nanpercentile(spectra, [1, 99])
+    fig, axes = plt.subplots(n_rows, n_columns, figsize=(1.7 * n_columns, 1.3 * n_rows + 0.6), squeeze=False)
+    for ax in axes.flat:
+        ax.axis("off")
+    for k, i in enumerate(index):
+        ax = axes[rows[k], columns[k]]
+        ax.axis("on")
+        ax.plot(LAM_GRID, spectra[k], lw=0.7)
+        ax.set_xlim(LAMBDA_0, LAMBDA_1)
+        ax.set_ylim(low - 0.05 * (high - low), high + 0.05 * (high - low))
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.text(0.04, 0.9, str(i), transform=ax.transAxes, fontsize=6, va="top")
+    fig.suptitle(f"{folder.name}: {signal_name()} from {LAMBDA_0:g} to {LAMBDA_1:g} nm, each panel in the position of its membrane, same vertical scale"
+                 + (f"\n{description(folder)}" if description(folder) else ""), fontsize=9)
+    plt.tight_layout()
+    fig.savefig(folder / f"mosaic_spectra{suffix()}.png", dpi=150)
+    print("Saved", folder / f"mosaic_spectra{suffix()}.png")
+    plt.show()
 
 
 def point_plot(folder, index, show=True):
@@ -350,7 +493,7 @@ def csv_plot(path, label=None, show=True):
     in a panel above the measurement, with the same wavelength axis.
     show=False: draw the figure without opening it yet (to open several together with one plt.show())."""
     path = run_path(path)
-    ch1, ch2 = read_csv(path)
+    ch1, ch2 = load_point(path)
     smooth = moving_average(ch2)
     modulation, peaks, f = analyze_point(ch1, ch2, smooth)
     if f is None:
@@ -361,7 +504,7 @@ def csv_plot(path, label=None, show=True):
     fig, axes = plt.subplots(2 if SIMULATION else 1, 1, figsize=(10, 7 if SIMULATION else 4.5), sharex=True, squeeze=False)
     axes = axes[:, 0]
     a = axes[-1]
-    a.plot(lam[inside], ch2[inside], color="gray", lw=0.6, alpha=0.6, label="raw CH2")
+    a.plot(lam[inside], ch2[inside], color="gray", lw=0.6, alpha=0.6, label="transmission T" if TRANSMISSION_REF else "raw CH2")
     a.plot(lam[inside], smooth[inside], color="red", lw=1.5, label=f"moving average (N={WINDOW})")
     zone = valid_zone(f, len(ch1))
     if zone:
@@ -372,11 +515,11 @@ def csv_plot(path, label=None, show=True):
                    textcoords="offset points", xytext=(0, 9), ha="center", fontsize=9)
     a.set_xlim(LAMBDA_0, LAMBDA_1)
     a.set_xlabel("wavelength (nm)")
-    a.set_ylabel("CH2 (V)")
+    a.set_ylabel(signal_name())
     a.legend(loc="best", fontsize=8)
     if SIMULATION:
         draw_simulation(axes[0])
-    axes[0].set_title(f"{label or path.name}: modulation {modulation:.4f} V, {len(peaks)} peaks")
+    axes[0].set_title(f"{label or path.name}: modulation {modulation:.4f} {unit()}, {len(peaks)} peaks")
     plt.tight_layout()
     if show:
         plt.show()
@@ -415,7 +558,7 @@ def fano_fit(path):
     moving average are fitted one by one, each in a window of +- FANO_WINDOW widths around it, on the raw CH2 data or, with
     FANO_ON_AVERAGE, on the moving average. Prints the parameters and plots data, fit and residuals."""
     path = run_path(path)
-    ch1, ch2 = read_csv(path)
+    ch1, ch2 = load_point(path)
     smooth = moving_average(ch2)
     _, peaks, f = analyze_point(ch1, ch2, smooth)
     if not peaks:
@@ -452,7 +595,7 @@ def fano_fit(path):
             ax.annotate(str(k + 1), (r["x0"], fano(r["x0"], *r["params"])), textcoords="offset points", xytext=(0, 10), ha="center")
         ax.set_xlim(LAMBDA_0, LAMBDA_1)
         ax.set_xlabel("wavelength (nm)")
-        ax.set_ylabel("CH2 (V)")
+        ax.set_ylabel(signal_name())
         ax.legend(loc="best")
         plt.tight_layout()
         plt.show()
@@ -470,7 +613,7 @@ def fano_fit(path):
             xx = np.linspace(r["x"][0], r["x"][-1], 2000)
             a1.plot(xx, fano(xx, *r["params"]), color="blue", lw=2, label="Fano fit")
             axes[0].set_title(f"resonance {k + 1}: x0={r['x0']:.5g} nm, Gamma={r['gamma']:.4g} nm, q={r['q']:.2f}", fontsize=10)
-            a1.set_ylabel("CH2 (V)")
+            a1.set_ylabel(signal_name())
             a1.legend(loc="best", fontsize=8)
             a2.plot(xb, yb - fano(xb, *r["params"]), "k.", ms=2)
             a2.axhline(0, color="blue", lw=1)
@@ -557,6 +700,9 @@ def main():
     a = sub.add_parser("point", help="check plot of one or more points of the run (no heatmaps)")
     a.add_argument("folder")
     a.add_argument("indices", nargs="+", type=int, help="point indices, e.g. 3 12 40")
+    a = sub.add_parser("mosaic", help="one png with the spectra of all the membranes of a run, each in its position")
+    a.add_argument("folder")
+    a.add_argument("--recompute", action="store_true", help="read all the CSV files again")
     a = sub.add_parser("view", help="plot one or more single acquisitions (CSV files), no heatmaps")
     a.add_argument("csv", nargs="+")
     a = sub.add_parser("fano", help="Fano fit of the resonances of one CSV")
@@ -567,11 +713,13 @@ def main():
     a.add_argument("--ref", type=int, help="id of the reference measurement for the ratios")
     args = p.parse_args()
     if args.command is None:                                         # no arguments: use WHAT TO LOOK AT
-        if not (RUN and (HEATMAPS or POINT is not None)) and VIEW is None and COMPARE is None and not FANO:
-            print("Nothing to do: set RUN (with HEATMAPS and/or POINT), VIEW, COMPARE and/or FANO in WHAT TO LOOK AT at the top of analysis.py, "
+        if not (RUN and (HEATMAPS or MOSAIC or POINT is not None)) and VIEW is None and COMPARE is None and not FANO:
+            print("Nothing to do: set RUN (with HEATMAPS, MOSAIC and/or POINT), VIEW, COMPARE and/or FANO in WHAT TO LOOK AT at the top of analysis.py, "
                   "or use a command (python analysis.py -h)")
         if RUN and HEATMAPS:
             run_heatmaps(RUN, RECOMPUTE)
+        if RUN and MOSAIC:
+            mosaic(RUN, RECOMPUTE)
         if RUN and POINT is not None:
             for i in ([POINT] if isinstance(POINT, int) else POINT):
                 point_plot(RUN, i, show=False)
@@ -584,6 +732,8 @@ def main():
             compare(COMPARE, REFERENCE)
         if FANO:
             fano_fit(FANO)
+    elif args.command == "mosaic":
+        mosaic(args.folder, args.recompute)
     elif args.command == "view":
         for path in args.csv:
             csv_plot(path, show=False)
