@@ -50,7 +50,7 @@ RECOMPUTE = False           # True: ignore analysis.csv and read all the CSV fil
 SIMULATION = ""             # simulation file (CSV or text: wavelength or frequency in one column, the spectrum in another): drawn above the measurement in the point plots
 SIM_COLUMNS = (0, 1)        # (column of the wavelength/frequency, column of the simulated spectrum) in the SIMULATION file, counting from 0
 MOSAIC = False              # True: also draw ONE png with the spectra (1520-1570 nm) of all the membranes of RUN, each one in the position of its membrane
-TRANSMISSION_REF = ""       # CSV of the transmission reference (the scan without the sample): if set, every measured spectrum is divided by it, so you get T like in the simulation. A bare name (e.g. "reference.csv") is looked for in the folder of each run first, so co-pol and cross-pol runs can each have their own reference
+POLARIZATION = ""           # "co" or "cross": every measured spectrum is divided by the transmission reference of that polarization (reference/copol.csv or reference/crosspol.csv, measured once), so you get T like in the simulation; "" = no division
 FANO = ""                   # CSV file to fit with a Fano line shape (e.g. "2026-10-06/run_007/point_011_x91.818_y146.526.csv"); "" = skip
 
 # ---------------------------------------------------------------- parameters of the method
@@ -60,6 +60,7 @@ V_START = 0.9               # the CH1 ramp starts when CH1 exceeds this value...
 END_TOLERANCE = 0.3         # ...and ends when CH1 is within this of its maximum (starting guess for the ramp fit)
 RAMP_MARGIN = 0.25          # the ramp fit also uses points before and after: this fraction of the duration on each side
 LAMBDA_0, LAMBDA_1 = 1520.0, 1570.0   # nm at the start and at the end of the CH1 ramp, i.e. of the laser scan
+REFERENCE_DIR = DATA / "reference"    # the transmission references (scan without the sample), measured once: copol.csv and crosspol.csv
 PROMINENCE_THRESHOLD = 0.1  # a peak counts if taller than this fraction of the excursion (modulation)...
 MIN_SNR = 10                # ...and than this multiple of the residual noise of the moving average...
 RUN_THRESHOLD = 0.1         # ...and than this fraction of the tallest peak of the whole run (no resonance = n.a.)
@@ -115,37 +116,42 @@ def read_csv(path):
 
 def suffix():
     """"" or "_T_<reference name>": added to the names of the results, so that the ones computed with a transmission reference do not mix with the others."""
-    return "_T_" + Path(TRANSMISSION_REF).stem if TRANSMISSION_REF else ""
+    return f"_T_{POLARIZATION}pol" if POLARIZATION else ""
 
 
 def unit():
-    return "T" if TRANSMISSION_REF else "V"
+    return "T" if POLARIZATION else "V"
 
 
 def signal_name():
-    return "transmission T" if TRANSMISSION_REF else "CH2 (V)"
+    return "transmission T" if POLARIZATION else "CH2 (V)"
 
 
 _reference = {}
 
 
-def reference_spectrum(folder):
-    """(wavelength, spectrum) of the transmission reference of the run in folder (or (None, level) if it has no scan); None if TRANSMISSION_REF is not set.
-    The file is the one called TRANSMISSION_REF inside the run folder, if it exists (each run has its own reference), otherwise the path as written."""
-    if not TRANSMISSION_REF:
+def reference_spectrum():
+    """(wavelength, spectrum) of the transmission reference of POLARIZATION (REFERENCE_DIR/copol.csv or crosspol.csv), or (None, level) if
+    it has no scan; None if POLARIZATION is not set. The big CSV is read once: its spectrum is saved next to it (copol.npz, crosspol.npz)."""
+    if not POLARIZATION:
         return None
-    inside = Path(folder) / TRANSMISSION_REF
-    path = inside if not Path(TRANSMISSION_REF).is_absolute() and inside.exists() else run_path(TRANSMISSION_REF)
+    path = REFERENCE_DIR / f"{POLARIZATION}pol.csv"
     if path not in _reference:
-        ch1, ch2 = read_csv(path)
-        _reference[path] = spectrum(ch1, ch2) if fit_ramp(ch1) is not None else (None, np.median(ch2) - DARK_LEVEL)
+        cache = path.with_suffix(".npz")
+        if cache.exists() and cache.stat().st_mtime >= path.stat().st_mtime:
+            saved = np.load(cache)
+            _reference[path] = (saved["lam"] if len(saved["lam"]) else None, saved["s"])
+        else:
+            ch1, ch2 = read_csv(path)
+            _reference[path] = spectrum(ch1, ch2) if fit_ramp(ch1) is not None else (None, np.median(ch2) - DARK_LEVEL)
+            np.savez(cache, lam=np.array([] if _reference[path][0] is None else _reference[path][0]), s=_reference[path][1])
     return _reference[path]
 
 
 def load_point(path):
-    """CH1 and CH2 of one acquisition. With TRANSMISSION_REF, CH2 is divided by the reference measurement at the same wavelength: T."""
+    """CH1 and CH2 of one acquisition. With POLARIZATION, CH2 is divided by the reference measurement at the same wavelength: T."""
     ch1, ch2 = read_csv(path)
-    ref = reference_spectrum(Path(path).parent)
+    ref = reference_spectrum()
     f = fit_ramp(ch1) if ref is not None else None
     if ref is None or (ref[0] is not None and f is None):
         return ch1, ch2
@@ -504,7 +510,7 @@ def csv_plot(path, label=None, show=True):
     fig, axes = plt.subplots(2 if SIMULATION else 1, 1, figsize=(10, 7 if SIMULATION else 4.5), sharex=True, squeeze=False)
     axes = axes[:, 0]
     a = axes[-1]
-    a.plot(lam[inside], ch2[inside], color="gray", lw=0.6, alpha=0.6, label="transmission T" if TRANSMISSION_REF else "raw CH2")
+    a.plot(lam[inside], ch2[inside], color="gray", lw=0.6, alpha=0.6, label="transmission T" if POLARIZATION else "raw CH2")
     a.plot(lam[inside], smooth[inside], color="red", lw=1.5, label=f"moving average (N={WINDOW})")
     zone = valid_zone(f, len(ch1))
     if zone:

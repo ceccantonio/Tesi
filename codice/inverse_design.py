@@ -24,7 +24,7 @@ import analysis
 SWEEP = Path(__file__).resolve().parent.parent / "GHz_aniso_metasurface" / "theory" / "PPML_apr2026" / "sweep_a_r.mat"
 RUN_CO = ""                  # run folder with the co-pol spectra, e.g. "2026-10-20/run_003"
 RUN_CROSS = ""               # run folder with the cross-pol spectra of the same membranes (same indices in griglia.csv)
-REFERENCE_FILE = ""          # name of the transmission reference inside each run folder (co-pol and cross-pol runs have their own), e.g. "reference.csv"; "" = no division
+USE_REFERENCE = False        # True: each run is divided by its transmission reference (reference/copol.csv for the co-pol run, reference/crosspol.csv for the cross-pol one)
 CO, CROSS = "Txx", "Txy"     # simulated components of the two runs ("Tyy", "Tyx" for the other pair)
 MEMBRANES = None             # indices of the membranes to fit (e.g. [12, 40]); None = all the points of RUN_CO
 MAX_SHIFT_NM = 2.0           # the fit may shift the measured wavelengths by up to +- this (error of the wavelength axis)
@@ -116,7 +116,6 @@ def main():
     parser.add_argument("membranes", nargs="*", type=int, help="indices of the membranes (empty = MEMBRANES)")
     args = parser.parse_args()
     wanted = args.membranes or MEMBRANES
-    analysis.TRANSMISSION_REF = REFERENCE_FILE                                    # each run divides by its own reference
     sweep = load_sweep(SWEEP)
     inside = (sweep["lam"] >= sweep["lam"][0] + MAX_SHIFT_NM) & (sweep["lam"] <= sweep["lam"][-1] - MAX_SHIFT_NM)
     lam = sweep["lam"][inside]                                                     # the wavelengths where a shift stays inside the sweep
@@ -128,7 +127,10 @@ def main():
     for row in rows_co.itertuples():
         if (wanted and row.indice not in wanted) or row.indice not in rows_cross.index:
             continue
-        data = [measured(folders[0], row, lam), measured(folders[1], rows_cross.loc[row.indice], lam)]
+        analysis.POLARIZATION = "co" if USE_REFERENCE else ""                      # each run is divided by the reference of its polarization
+        co = measured(folders[0], row, lam)
+        analysis.POLARIZATION = "cross" if USE_REFERENCE else ""
+        data = [co, measured(folders[1], rows_cross.loc[row.indice], lam)]
         ok = ~np.isnan(data[0]) & ~np.isnan(data[1])
         if ok.sum() < 10:
             print(f"membrane {row.indice}: not enough measured wavelengths in the window, skipped")
