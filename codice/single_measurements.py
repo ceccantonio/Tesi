@@ -14,7 +14,7 @@ import numpy as np
 from acquisition import DATA, scan, still_acquisition
 from initialization import init
 
-SCAN = False         # True: laser scan (spectrum); False: laser still, forced trigger (a single level)
+SCAN = True          # True: laser scan 1520-1570 nm (spectrum); False: laser still, forced trigger (a single level)
 USE_MOTORS = False   # True: asks for the position (X Y) and moves the motors before measuring
 N_SAMPLES = 100000   # without scan: samples read per measurement (None = the whole record, ~240 MB)
 
@@ -23,6 +23,7 @@ FIELDS = ["id", "ora", "nome", "x_mm", "y_mm", "con_scansione", "file", "note"] 
 
 
 def main():
+    print("Mode:", "laser SCAN (spectrum)" if SCAN else "NO scan: laser still, forced trigger (set SCAN = True at the top of this file for a spectrum)")
     laser, scope, motors = init(laser=SCAN, motors=USE_MOTORS, n_samples=None if SCAN else N_SAMPLES)
     FOLDER.mkdir(exist_ok=True)
     registry = FOLDER / "misure.csv"
