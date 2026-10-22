@@ -6,7 +6,8 @@
     python analysis.py view misure_singole/m004_x.csv     # plot of single acquisitions (CSV files), no run folder needed
     python analysis.py fano 2026-10-06/run_007/point_011_x91.818_y146.526.csv   # Fano fit of the resonances of one CSV
     python analysis.py list                         # list of the single measurements
-    python analysis.py compare 1 2 3 --ref 1        # compare single measurements and divide them by measurement 1
+    python analysis.py compare 1 2 3                # compare single measurements, in volts (add --ratio --ref 1 to divide them by measurement 1)
+    python analysis.py compare 2026-10-06/run_007:12 reference/copol.csv   # a point of a run and the reference, from different folders
     python analysis.py                              # no arguments: does what is written in "WHAT TO LOOK AT" below
 
 Method (as in movemin.py): moving average of CH2 (np.convolve) inside the CH1 ramp.
@@ -44,8 +45,9 @@ RUN = ""                    # run folder (e.g. "2026-10-06/run_007"); "" = skip
 HEATMAPS = True             # True: draw the heatmaps of RUN (modulation and Q); False: skip them (e.g. to look only at some points)
 POINT = None                # point(s) of RUN to plot in detail: an index (12) or a list ([3, 12, 40]); None = skip
 VIEW = None                 # CSV file(s) of single acquisitions to plot, no run folder needed: a path or a list of paths; None = skip
-COMPARE = None              # ids of the single measurements to compare (e.g. [1, 2, 3], [] = all); None = skip
-REFERENCE = None            # id of the reference measurement for the ratios (None = the first one)
+COMPARE = None              # what to compare (in volts), from ANY folder, mixed as you like: ids of the single measurements (1), CSV files ("2026-10-06/run_007/point_012.csv", "reference/copol.csv"), points of a run ("2026-10-06/run_007:12"); [] = all the single measurements; None = skip. Or a dict of lists for one panel per group, one above the other: {"co": [...], "cross": [...]}
+COMPARE_RATIO = False       # False: only the spectra and their mean values; True: also divide each one by REFERENCE
+REFERENCE = None            # used only with COMPARE_RATIO = True: the one the others are divided by, written in the same way (None = the first of each group), or a dict like COMPARE, e.g. the point without the membrane
 RECOMPUTE = False           # True: ignore analysis.csv and read all the CSV files again
 SIMULATION = ""             # simulation file (CSV or text: wavelength or frequency in one column, the spectrum in another): drawn above the measurement in the point plots
 SIM_COLUMNS = (0, 1)        # (column of the wavelength/frequency, column of the simulated spectrum) in the SIMULATION file, counting from 0
@@ -647,52 +649,105 @@ def spectrum(ch1, ch2, n_points=5000):
     return wavelength(i0 + (np.arange(k) + 0.5) * n - 0.5, f), np.median(ch2[i0:i0 + k * n].reshape(k, n), axis=1) - DARK_LEVEL
 
 
-def compare(ids=None, ref=None):
-    """Compare single measurements (same kind as the reference) and divide them by measurement ref (default: the first)."""
-    m = measurements()
-    m = m[m["id"].isin(ids)] if ids else m
-    ref = ref or int(m["id"].iloc[0])
-    scanned = str(m[m["id"] == ref]["con_scansione"].iloc[0]) == "True"
-    m = m[m["con_scansione"].astype(str) == str(scanned)]
-    data = {r.id: read_csv(DATA / "misure_singole" / r.file) for r in m.itertuples()}
-    labels = {r.id: f"{r.id} {r.nome}" for r in m.itertuples()}
+def load_item(item):
+    """What to compare can be: the id of a single measurement (misure_singole/misure.csv), a CSV file in ANY folder, or a point of a run,
+    written "run folder:point index" (e.g. "2026-10-06/run_007:12"). Returns (label, ch1, ch2, notes)."""
+    if isinstance(item, (int, np.integer)):
+        r = measurements().query("id == @item").iloc[0]
+        ch1, ch2 = load_point(DATA / "misure_singole" / r.file)
+        return f"{r.id} {r.nome}", ch1, ch2, r.note
+    folder_text, _, index = str(item).rpartition(":")
+    if folder_text and index.isdigit():                                       # "run folder:point index"
+        folder, n = run_path(folder_text), int(index)
+        row = read_registry(folder).query("indice == @n").iloc[0]
+        ch1, ch2 = load_point(folder / row.file)
+        return f"{folder.parent.name}/{folder.name} point {n}", ch1, ch2, description(folder)
+    path = run_path(str(item))
+    ch1, ch2 = load_point(path)
+    return "/".join(path.parts[-3:-1] + (path.stem,)), ch1, ch2, ""             # e.g. "2026-10-06/run_007/point_012": two folders tell them apart
+
+
+def compare_group(items, ref=None, ratio=False, ax=None, title=""):
+    """Compares the spectra of one list of items (see load_item). By default only the spectra are drawn and their mean value printed, in the
+    units of the signal (volts, or T with POLARIZATION). With ratio=True each one is also divided by the reference ref (default: the first item).
+    The items of another kind than the first one (laser scan / no scan) are skipped. ax: panel where the spectra are drawn."""
+    items = list(items) if items else list(measurements()["id"])
+    ref = items[0] if ref is None else ref
+    items = items if ref in items else [ref] + items
+    loaded = [load_item(item) for item in items]
+    r = items.index(ref)
+    scanned = fit_ramp(loaded[r][1]) is not None
+    keep = [k for k in range(len(items)) if (fit_ramp(loaded[k][1]) is not None) == scanned]
+    for k in set(range(len(items))) - set(keep):
+        print(f"skipped {loaded[k][0]}: it is not the same kind of acquisition as the first one (scan / no scan)")
+    labels = {k: loaded[k][0] + (f" ({k})" if [loaded[j][0] for j in keep].count(loaded[k][0]) > 1 else "") for k in keep}
     if scanned:
-        curves = {i: spectrum(*d) for i, d in data.items()}
+        curves = {k: spectrum(loaded[k][1], loaded[k][2]) for k in keep}
         lam = np.linspace(max(c[0][0] for c in curves.values()), min(c[0][-1] for c in curves.values()), 2000)
-        s = {i: np.interp(lam, *c) for i, c in curves.items()}
-        for i in s:
-            plt.plot(lam, s[i], lw=2.2 if i == ref else 1.2, label=labels[i])
-        plt.xlabel("wavelength (nm)")
-        plt.ylabel("CH2 (V)")
-        plt.legend()
-        plt.tight_layout()
-        values = {i: s[i].mean() for i in s}
-        ratios = {i: (s[i] / s[ref]).mean() for i in s}
-        errors = {i: np.nan for i in s}
+        s = {k: np.interp(lam, *c) for k, c in curves.items()}
+        if ax is None:
+            plt.figure(figsize=(10, 4.5))
+            ax = plt.gca()
+        for k in keep:
+            ax.plot(lam, s[k], lw=2.2 if ratio and k == r else 1.2, label=labels[k])
+        ax.set_xlabel("wavelength (nm)")
+        ax.set_ylabel(signal_name())
+        ax.legend(loc="best", fontsize=8)
+        if title:
+            ax.set_title(title)
+        values = {k: s[k].mean() for k in keep}
+        errors = {k: np.nan for k in keep}
+        ratios = {k: (s[k] / s[r]).mean() for k in keep}
     else:
         level, err = {}, {}
-        for i, (_, ch2) in data.items():
+        for k in keep:
+            ch2 = loaded[k][2]
             blocks = np.median(ch2[:len(ch2) // 1000 * 1000].reshape(-1, 1000), axis=1)
-            level[i], err[i] = np.median(ch2) - DARK_LEVEL, blocks.std(ddof=1) / np.sqrt(len(blocks))
+            level[k], err[k] = np.median(ch2) - DARK_LEVEL, blocks.std(ddof=1) / np.sqrt(len(blocks))
         values = level
-        ratios = {i: level[i] / level[ref] for i in level}
-        errors = {i: abs(ratios[i]) * np.hypot(err[i] / level[i], err[ref] / level[ref]) for i in level}
-        fig, (a1, a2) = plt.subplots(1, 2, figsize=(12, 4.5))
-        x = np.arange(len(level))
-        a1.bar(x, [level[i] for i in level], yerr=[err[i] for i in level], capsize=3)
-        a2.bar(x, [ratios[i] for i in level], yerr=[errors[i] for i in level], capsize=3)
-        for a, t in ((a1, "CH2 level (V)"), (a2, f"ratio to measurement {ref}")):
+        ratios = {k: level[k] / level[r] for k in keep}
+        errors = {k: abs(ratios[k]) * np.hypot(err[k] / level[k], err[r] / level[r]) for k in keep}
+        fig, axes = plt.subplots(1, 2 if ratio else 1, figsize=(12 if ratio else 7, 4.5), squeeze=False)
+        x = np.arange(len(keep))
+        axes[0, 0].bar(x, [level[k] for k in keep], yerr=[err[k] for k in keep], capsize=3)
+        panels = [(axes[0, 0], f"{signal_name()} level")]
+        if ratio:
+            axes[0, 1].bar(x, [ratios[k] for k in keep], yerr=[errors[k] for k in keep], capsize=3)
+            axes[0, 1].axhline(1, color="gray", lw=0.8, ls=":")
+            panels.append((axes[0, 1], f"ratio to {labels[r]}"))
+        for a, t in panels:
             a.set_xticks(x)
-            a.set_xticklabels([labels[i] for i in level], rotation=30, ha="right")
+            a.set_xticklabels([labels[k] for k in keep], rotation=30, ha="right")
             a.set_ylabel(t)
-        a2.axhline(1, color="gray", lw=0.8, ls=":")
         plt.tight_layout()
-    table = pd.DataFrame({"id": list(values), "name": [labels[i] for i in values], "value_V": list(values.values()),
-                          f"ratio_to_{ref}": list(ratios.values()), "ratio_error": list(errors.values()),
-                          "notes": [m[m["id"] == i]["note"].iloc[0] for i in values]})
-    print(table.to_string(index=False))
-    plt.show()
+    table = pd.DataFrame({"name": [labels[k] for k in keep], f"mean_{unit()}": [values[k] for k in keep]})
+    if scanned is False:
+        table["error"] = [err[k] for k in keep]
+    if ratio:
+        table[f"ratio_to_{labels[r]}"] = [ratios[k] for k in keep]
+        table["ratio_error"] = [errors[k] for k in keep]
+    table["notes"] = [loaded[k][3] for k in keep]
+    print((f"--- {title} ---\n" if title else "") + table.to_string(index=False))
     return table
+
+
+def compare(items=None, ref=None, ratio=False):
+    """Compare spectra that can be anywhere: ids of the single measurements, CSV files in any folder (also the transmission references:
+    "reference/copol.csv"), points of a run ("folder:index"), mixed as you like (see load_item). By default the signals are compared as they
+    are (volts) with no ratio; ratio=True also divides each one by the reference ref.
+    items can also be a dict of lists, e.g. {"co": [...], "cross": [...]}: one panel for each group, one above the other (ref can be a dict too)."""
+    groups = items if isinstance(items, dict) else {"": items}
+    fig, axes = plt.subplots(len(groups), 1, figsize=(10, 4.5 * len(groups)), sharex=True, squeeze=False)
+    tables = {}
+    for ax, (name, group) in zip(axes[:, 0], groups.items()):
+        tables[name] = compare_group(group, ref[name] if isinstance(ref, dict) else ref, ratio, ax, name)
+    if not any(ax.lines for ax in axes[:, 0]):
+        plt.close(fig)                                                              # the groups were not scans: they drew their own figures
+    else:
+        plt.figure(fig.number)
+        plt.tight_layout()
+    plt.show()
+    return tables if isinstance(items, dict) else tables[""]
 
 
 # ---------------------------------------------------------------- from the terminal
@@ -714,9 +769,10 @@ def main():
     a = sub.add_parser("fano", help="Fano fit of the resonances of one CSV")
     a.add_argument("csv")
     sub.add_parser("list", help="list of the single measurements")
-    a = sub.add_parser("compare", help="compare single measurements")
-    a.add_argument("ids", nargs="*", type=int, help="measurement ids (empty = all)")
-    a.add_argument("--ref", type=int, help="id of the reference measurement for the ratios")
+    a = sub.add_parser("compare", help="compare spectra from any folder: single-measurement ids, CSV files, points of a run (folder:index)")
+    a.add_argument("items", nargs="*", help="ids, CSV files or run_folder:index (empty = all the single measurements)")
+    a.add_argument("--ratio", action="store_true", help="also divide each item by the reference (default: only the spectra, in volts)")
+    a.add_argument("--ref", help="with --ratio: the item the others are divided by (default: the first)")
     args = p.parse_args()
     if args.command is None:                                         # no arguments: use WHAT TO LOOK AT
         if not (RUN and (HEATMAPS or MOSAIC or POINT is not None)) and VIEW is None and COMPARE is None and not FANO:
@@ -735,7 +791,7 @@ def main():
                 csv_plot(path, show=False)
             plt.show()
         if COMPARE is not None:
-            compare(COMPARE, REFERENCE)
+            compare(COMPARE, REFERENCE, COMPARE_RATIO)
         if FANO:
             fano_fit(FANO)
     elif args.command == "mosaic":
@@ -755,7 +811,8 @@ def main():
     elif args.command == "list":
         print(measurements().to_string(index=False))
     else:
-        compare(args.ids, args.ref)
+        number = lambda text: int(text) if text.isdigit() else text           # "3" is the id of a single measurement, anything else a file or run:index
+        compare([number(i) for i in args.items], number(args.ref) if args.ref else None, args.ratio)
 
 
 if __name__ == "__main__":
