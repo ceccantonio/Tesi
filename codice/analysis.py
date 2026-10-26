@@ -303,6 +303,9 @@ def analyze_run(folder, recompute=False):
         except pd.errors.EmptyDataError:
             saved = pd.DataFrame()
         if "x_mm" in saved.columns and len(saved):                  # an empty or broken analysis.csv is ignored
+            if SAVE_NM and not (folder / "spectra_nm").exists():
+                print("analysis.csv already exists, but spectra_nm does not: saving the data in nm and volts now")
+                export_nm(folder)
             return saved
     points, missing, spectra = [], [], {}
     registry = read_registry(folder)
@@ -338,6 +341,8 @@ def analyze_run(folder, recompute=False):
                      "width_samples": best["width"] if best else np.nan,
                      "lambda_nm": best["lambda_nm"] if best else np.nan, "width_nm": best["width_nm"] if best else np.nan,
                      "ramp_start": f[0] if f else np.nan, "ramp_end": f[1] if f else np.nan})
+    if SAVE_NM:
+        print("Data in nm and volts (1520-1570 nm) saved in", folder / "spectra_nm")
     table = pd.DataFrame(rows)
     table.to_csv(cache, index=False)
     np.savez(folder / f"spectra{suffix()}.npz", index=list(spectra), spectra=np.array(list(spectra.values())))
