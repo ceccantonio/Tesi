@@ -33,6 +33,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.colors import Normalize
+from matplotlib.ticker import MaxNLocator
 from matplotlib.patches import Rectangle
 from scipy.optimize import curve_fit, least_squares
 from scipy.signal import fftconvolve, find_peaks, peak_widths
@@ -443,7 +444,7 @@ def mosaic(folder, recompute=False):
         return
     rows, columns, n_rows, n_columns = lay
     low, high = np.nanpercentile(spectra, [1, 99])
-    fig, axes = plt.subplots(n_rows, n_columns, figsize=(1.7 * n_columns, 1.3 * n_rows + 0.6), squeeze=False)
+    fig, axes = plt.subplots(n_rows, n_columns, figsize=(2.0 * n_columns + 0.8, 1.7 * n_rows + 1.3), squeeze=False)
     for ax in axes.flat:
         ax.axis("off")
     for k, i in enumerate(index):
@@ -452,12 +453,19 @@ def mosaic(folder, recompute=False):
         ax.plot(LAM_GRID, spectra[k], lw=0.7)
         ax.set_xlim(LAMBDA_0, LAMBDA_1)
         ax.set_ylim(low - 0.05 * (high - low), high + 0.05 * (high - low))
-        ax.set_xticks([])
-        ax.set_yticks([])
-        ax.text(0.04, 0.9, str(i), transform=ax.transAxes, fontsize=6, va="top")
+        ax.set_xticks([LAMBDA_0, (LAMBDA_0 + LAMBDA_1) / 2, LAMBDA_1])             # axes with numbers on every panel
+        ax.yaxis.set_major_locator(MaxNLocator(3))
+        ax.tick_params(labelsize=7, length=3, width=0.8, pad=2)
+        labels = ax.get_xticklabels()                                              # the end labels stay inside their own panel
+        labels[0].set_ha("left")
+        labels[-1].set_ha("right")
+        ax.grid(alpha=0.3, lw=0.3)
+        ax.text(0.04, 0.93, str(i), transform=ax.transAxes, fontsize=8, va="top", fontweight="bold")
+    fig.supxlabel("wavelength (nm)", fontsize=11)
+    fig.supylabel(signal_name(), fontsize=11)
     fig.suptitle(f"{folder.name}: {signal_name()} from {LAMBDA_0:g} to {LAMBDA_1:g} nm, each panel in the position of its membrane, same vertical scale"
                  + (f"\n{description(folder)}" if description(folder) else ""), fontsize=9)
-    plt.tight_layout()
+    plt.tight_layout(rect=(0.01, 0.01, 1, 0.96), h_pad=1.5, w_pad=1.5)
     fig.savefig(folder / f"mosaic_spectra{suffix()}.png", dpi=150)
     print("Saved", folder / f"mosaic_spectra{suffix()}.png")
     plt.show()
