@@ -1,6 +1,8 @@
 """Data analysis: modulation amplitude, quality factor, heatmaps and comparison of single measurements.
 
     python analysis.py run 2026-10-06/run_007       # modulation and Q of every point -> analysis.csv + two heatmaps
+    python analysis.py nm 2026-10-06/run_007        # all the points of a run saved with x = wavelength (nm) and y = CH2 (V), 1520-1570 nm, in run_007/spectra_nm/
+                                                    # (analyzing a run does it too, while SAVE_NM = True)
     python analysis.py mosaic 2026-10-06/run_007    # ONE png with the spectra of all the membranes, each in the position of its membrane
     python analysis.py point 2026-10-06/run_007 3 12 40   # detail plots of some points of a run (no heatmaps)
     python analysis.py view misure_singole/m004_x.csv     # plot of single acquisitions (CSV files), no run folder needed
@@ -27,6 +29,7 @@ that format is the one written by the earlier notebooks and by acquisition.py.
 """
 import argparse
 import io
+import shutil
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -50,6 +53,8 @@ COMPARE = None              # what to compare (in volts), from ANY folder, mixed
 COMPARE_RATIO = False       # False: only the spectra and their mean values; True: also divide each one by REFERENCE
 REFERENCE = None            # used only with COMPARE_RATIO = True: the one the others are divided by, written in the same way (None = the first of each group), or a dict like COMPARE, e.g. the point without the membrane
 RECOMPUTE = False           # True: ignore analysis.csv and read all the CSV files again
+SAVE_NM = True              # when a run is analyzed, also save its points in <run>/spectra_nm/: x = wavelength (nm), y = CH2 (V), only from LAMBDA_0 to LAMBDA_1
+SAVE_NM_POINTS = None       # None = every sample of the window (about 25 MB per point); a number = reduced to about that many points (block median)
 SIMULATION = ""             # simulation file (CSV or text: wavelength or frequency in one column, the spectrum in another): drawn above the measurement in the point plots
 SIM_COLUMNS = (0, 1)        # (column of the wavelength/frequency, column of the simulated spectrum) in the SIMULATION file, counting from 0
 MOSAIC = False              # True: also draw ONE png with the spectra (1520-1570 nm) of all the membranes of RUN, each one in the position of its membrane
@@ -151,18 +156,55 @@ def reference_spectrum():
     return _reference[path]
 
 
-def load_point(path):
-    """CH1 and CH2 of one acquisition. With POLARIZATION, CH2 is divided by the reference measurement at the same wavelength: T."""
-    ch1, ch2 = read_csv(path)
+def normalize(ch1, ch2):
+    """CH2 divided by the transmission reference of POLARIZATION at the same wavelength: T. Unchanged if POLARIZATION is not set."""
     ref = reference_spectrum()
     f = fit_ramp(ch1) if ref is not None else None
     if ref is None or (ref[0] is not None and f is None):
-        return ch1, ch2
+        return ch2
     if ref[0] is None:
         den = ref[1]
     else:
         den = np.maximum(np.interp(wavelength(np.arange(len(ch2)), f), *ref), 0.02 * ref[1].max())   # where the reference is dark T is not defined
-    return ch1, (ch2 - DARK_LEVEL) / den
+    return (ch2 - DARK_LEVEL) / den
+
+
+def load_point(path):
+    """CH1 and CH2 of one acquisition. With POLARIZATION, CH2 is divided by the reference measurement at the same wavelength: T."""
+    ch1, ch2 = read_csv(path)
+    return ch1, normalize(ch1, ch2)
+
+
+def save_nm(folder, name, ch1, volts):
+    """Saves one acquisition in folder/spectra_nm/name: wavelength (nm) and CH2 (V), only from LAMBDA_0 to LAMBDA_1 (the CH1 ramp).
+    SAVE_NM_POINTS: None = every sample of the window, a number = reduced to about that many points (block median).
+    The registry (griglia.csv) and description.txt of the run are copied next to the files."""
+    f = fit_ramp(ch1)
+    if f is None:
+        print(f"{name}: no ramp in CH1, not saved in spectra_nm")
+        return
+    i0, i1 = int(np.ceil(f[0])), int(np.floor(f[1]))
+    lam, v = wavelength(np.arange(i0, i1 + 1), f), volts[i0:i1 + 1]
+    if SAVE_NM_POINTS:
+        n = max(1, len(lam) // int(SAVE_NM_POINTS))
+        k = len(lam) // n
+        lam, v = lam[:k * n].reshape(k, n).mean(axis=1), np.median(v[:k * n].reshape(k, n), axis=1)
+    out = Path(folder) / "spectra_nm"
+    out.mkdir(exist_ok=True)
+    pd.DataFrame({"wavelength_nm": lam, "CH2_V": v}).to_csv(out / name, index=False, float_format="%.5f")
+    for extra in ("griglia.csv", "description.txt"):
+        if (Path(folder) / extra).exists() and not (out / extra).exists():
+            shutil.copy(Path(folder) / extra, out / extra)
+
+
+def export_nm(folder):
+    """Saves in <run>/spectra_nm/ all the points of a run (x = wavelength in nm, y = CH2 in volts, LAMBDA_0 to LAMBDA_1), without analyzing them."""
+    folder = run_path(folder)
+    for r in read_registry(folder).itertuples():
+        if (folder / r.file).exists():
+            save_nm(folder, r.file, *read_csv(folder / r.file))
+            print(f"saved {r.file}")
+    print("Saved in", folder / "spectra_nm")
 
 
 def moving_average(y, n=WINDOW):
@@ -269,7 +311,10 @@ def analyze_run(folder, recompute=False):
         print("description:", description(folder))
     for r in registry.itertuples():
         if (folder / r.file).exists():
-            ch1, ch2 = load_point(folder / r.file)
+            ch1, volts = read_csv(folder / r.file)
+            if SAVE_NM:
+                save_nm(folder, r.file, ch1, volts)                              # the data in nm and volts, in the same pass over the big files
+            ch2 = normalize(ch1, volts)
             modulation, peaks, f = analyze_point(ch1, ch2)
             print(f"point {r.indice}: modulation {modulation:.4f} {unit()}, {len(peaks)} peaks")
             points.append((r, modulation, peaks, f))
@@ -788,6 +833,8 @@ def main():
     a = sub.add_parser("point", help="check plot of one or more points of the run (no heatmaps)")
     a.add_argument("folder")
     a.add_argument("indices", nargs="+", type=int, help="point indices, e.g. 3 12 40")
+    a = sub.add_parser("nm", help="save all the points of a run in <run>/spectra_nm/ (wavelength in nm, CH2 in volts, 1520-1570 nm)")
+    a.add_argument("folder")
     a = sub.add_parser("mosaic", help="one png with the spectra of all the membranes of a run, each in its position")
     a.add_argument("folder")
     a.add_argument("--recompute", action="store_true", help="read all the CSV files again")
@@ -821,6 +868,8 @@ def main():
             compare(COMPARE, REFERENCE, COMPARE_RATIO)
         if FANO:
             fano_fit(FANO)
+    elif args.command == "nm":
+        export_nm(args.folder)
     elif args.command == "mosaic":
         mosaic(args.folder, args.recompute)
     elif args.command == "view":
