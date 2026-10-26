@@ -200,11 +200,27 @@ def save_nm(folder, name, ch1, volts):
 def export_nm(folder):
     """Saves in <run>/spectra_nm/ all the points of a run (x = wavelength in nm, y = CH2 in volts, LAMBDA_0 to LAMBDA_1), without analyzing them."""
     folder = run_path(folder)
-    for r in read_registry(folder).itertuples():
+    registry = read_registry(folder)
+    done = 0
+    for r in registry.itertuples():
         if (folder / r.file).exists():
             save_nm(folder, r.file, *read_csv(folder / r.file))
             print(f"saved {r.file}")
-    print("Saved in", folder / "spectra_nm")
+            done += 1
+    if done:
+        print("Saved in", folder / "spectra_nm")
+    else:
+        print(f"spectra_nm NOT created: none of the {len(registry)} files listed in griglia.csv is in {folder} (first one: {registry['file'].iloc[0] if len(registry) else '-'})")
+
+
+def ensure_nm(folder):
+    """Makes sure that <run>/spectra_nm exists (when SAVE_NM): it is created if it is missing, whatever else is being done with the run."""
+    folder = run_path(folder)
+    if SAVE_NM and not (folder / "spectra_nm").exists():
+        print("spectra_nm does not exist yet: saving the data in nm and volts")
+        export_nm(folder)
+    elif SAVE_NM:
+        print("Data in nm and volts:", folder / "spectra_nm")
 
 
 def moving_average(y, n=WINDOW):
@@ -854,13 +870,15 @@ def main():
     a.add_argument("--ref", help="with --ratio: the item the others are divided by (default: the first)")
     args = p.parse_args()
     if args.command is None:                                         # no arguments: use WHAT TO LOOK AT
-        if not (RUN and (HEATMAPS or MOSAIC or POINT is not None)) and VIEW is None and COMPARE is None and not FANO:
+        if not RUN and VIEW is None and COMPARE is None and not FANO:
             print("Nothing to do: set RUN (with HEATMAPS, MOSAIC and/or POINT), VIEW, COMPARE and/or FANO in WHAT TO LOOK AT at the top of analysis.py, "
                   "or use a command (python analysis.py -h)")
         if RUN and HEATMAPS:
             run_heatmaps(RUN, RECOMPUTE)
         if RUN and MOSAIC:
             mosaic(RUN, RECOMPUTE)
+        if RUN:
+            ensure_nm(RUN)                                                   # also if only the points / the mosaic were asked
         if RUN and POINT is not None:
             for i in ([POINT] if isinstance(POINT, int) else POINT):
                 point_plot(RUN, i, show=False)
@@ -877,6 +895,7 @@ def main():
         export_nm(args.folder)
     elif args.command == "mosaic":
         mosaic(args.folder, args.recompute)
+        ensure_nm(args.folder)
     elif args.command == "view":
         for path in args.csv:
             csv_plot(path, show=False)
@@ -885,6 +904,7 @@ def main():
         fano_fit(args.csv)
     elif args.command == "run":
         run_heatmaps(args.folder, args.recompute)
+        ensure_nm(args.folder)
     elif args.command == "point":
         for i in args.indices:
             point_plot(args.folder, i, show=False)
