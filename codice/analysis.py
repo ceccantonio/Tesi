@@ -1,6 +1,7 @@
 """Data analysis: modulation amplitude, quality factor, heatmaps and comparison of single measurements.
 
     python analysis.py run 2026-10-06/run_007       # modulation and Q of every point -> analysis.csv + two heatmaps
+    python analysis.py nm reference/copol.csv       # the same for ONE csv, e.g. the transmission reference -> reference/spectra_nm/copol.csv (for MATLAB)
     python analysis.py nm 2026-10-06/run_007        # all the points of a run saved with x = wavelength (nm) and y = CH2 (V), 1520-1570 nm, in run_007/spectra_nm/
                                                     # (analyzing a run does it too, while SAVE_NM = True)
     python analysis.py mosaic 2026-10-06/run_007    # ONE png with the spectra of all the membranes, each in the position of its membrane
@@ -198,19 +199,26 @@ def save_nm(folder, name, ch1, volts):
 
 
 def export_nm(folder):
-    """Saves in <run>/spectra_nm/ all the points of a run (x = wavelength in nm, y = CH2 in volts, LAMBDA_0 to LAMBDA_1), without analyzing them."""
-    folder = run_path(folder)
-    registry = read_registry(folder)
+    """Saves in <folder>/spectra_nm/ the acquisitions as x = wavelength (nm), y = CH2 (V), LAMBDA_0 to LAMBDA_1, without analyzing them.
+    folder can be a run (the points of griglia.csv), a folder of CSV files without registry (e.g. "reference": copol.csv, crosspol.csv)
+    or a single CSV file (e.g. "reference/copol.csv" -> reference/spectra_nm/copol.csv)."""
+    path = run_path(folder)
+    if path.is_file():
+        folder, files = path.parent, [path.name]
+    elif (path / "griglia.csv").exists():
+        folder, files = path, list(read_registry(path)["file"])
+    else:
+        folder, files = path, sorted(q.name for q in path.glob("*.csv"))
     done = 0
-    for r in registry.itertuples():
-        if (folder / r.file).exists():
-            save_nm(folder, r.file, *read_csv(folder / r.file))
-            print(f"saved {r.file}")
+    for name in files:
+        if (folder / name).exists():
+            save_nm(folder, name, *read_csv(folder / name))
+            print(f"saved {name}")
             done += 1
     if done:
         print("Saved in", folder / "spectra_nm")
     else:
-        print(f"spectra_nm NOT created: none of the {len(registry)} files listed in griglia.csv is in {folder} (first one: {registry['file'].iloc[0] if len(registry) else '-'})")
+        print(f"spectra_nm NOT created: none of the {len(files)} files is in {folder} (first one: {files[0] if files else '-'})")
 
 
 def ensure_nm(folder):
@@ -854,8 +862,8 @@ def main():
     a = sub.add_parser("point", help="check plot of one or more points of the run (no heatmaps)")
     a.add_argument("folder")
     a.add_argument("indices", nargs="+", type=int, help="point indices, e.g. 3 12 40")
-    a = sub.add_parser("nm", help="save all the points of a run in <run>/spectra_nm/ (wavelength in nm, CH2 in volts, 1520-1570 nm)")
-    a.add_argument("folder")
+    a = sub.add_parser("nm", help="save the points of a run, a folder of CSV files or one CSV (e.g. reference/copol.csv) in spectra_nm/ (wavelength in nm, CH2 in volts, 1520-1570 nm)")
+    a.add_argument("folder", help="run folder, folder of CSV files, or a CSV file")
     a = sub.add_parser("mosaic", help="one png with the spectra of all the membranes of a run, each in its position")
     a.add_argument("folder")
     a.add_argument("--recompute", action="store_true", help="read all the CSV files again")
