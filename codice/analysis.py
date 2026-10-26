@@ -434,7 +434,9 @@ def run_spectra(folder, recompute=False):
 
 def mosaic(folder, recompute=False):
     """ONE png with the spectrum (LAMBDA_0 to LAMBDA_1) of every membrane, each one in the position of its membrane: the top left of the
-    png is the top left of the sample (same orientation as the heatmaps). Same vertical scale everywhere."""
+    png is the top left of the sample (same orientation as the heatmaps). Same vertical scale everywhere. With SIMULATION set, the
+    simulated spectrum is drawn over every measured one (green): on the same axis if the spectra are the transmission T (POLARIZATION),
+    otherwise on its own axis on the right, since volts and T cannot share a scale."""
     folder = run_path(folder)
     index, spectra = run_spectra(folder, recompute)
     registry = read_registry(folder).set_index("indice").loc[index]
@@ -444,6 +446,13 @@ def mosaic(folder, recompute=False):
         return
     rows, columns, n_rows, n_columns = lay
     low, high = np.nanpercentile(spectra, [1, 99])
+    sim = None
+    if SIMULATION:
+        x_sim, y_sim = read_simulation(SIMULATION)
+        inside = (x_sim >= LAMBDA_0) & (x_sim <= LAMBDA_1)
+        sim = (x_sim[inside], y_sim[inside])
+        if POLARIZATION:                                                          # same axis: the scale must include the simulation
+            low, high = min(low, sim[1].min()), max(high, sim[1].max())
     fig, axes = plt.subplots(n_rows, n_columns, figsize=(2.0 * n_columns + 0.8, 1.7 * n_rows + 1.3), squeeze=False)
     for ax in axes.flat:
         ax.axis("off")
@@ -451,6 +460,15 @@ def mosaic(folder, recompute=False):
         ax = axes[rows[k], columns[k]]
         ax.axis("on")
         ax.plot(LAM_GRID, spectra[k], lw=0.7)
+        if sim is not None:
+            if POLARIZATION:
+                ax.plot(*sim, color="tab:green", lw=0.9, alpha=0.9)
+            else:                                                                  # volts: the simulation has its own axis, on the right
+                twin = ax.twinx()
+                twin.plot(*sim, color="tab:green", lw=0.9, alpha=0.9)
+                twin.set_ylim(sim[1].min() - 0.05 * np.ptp(sim[1]), sim[1].max() + 0.05 * np.ptp(sim[1]))
+                twin.yaxis.set_major_locator(MaxNLocator(3))
+                twin.tick_params(labelsize=7, length=3, width=0.8, pad=2, colors="tab:green")
         ax.set_xlim(LAMBDA_0, LAMBDA_1)
         ax.set_ylim(low - 0.05 * (high - low), high + 0.05 * (high - low))
         ax.set_xticks([LAMBDA_0, (LAMBDA_0 + LAMBDA_1) / 2, LAMBDA_1])             # axes with numbers on every panel
@@ -463,9 +481,10 @@ def mosaic(folder, recompute=False):
         ax.text(0.04, 0.93, str(i), transform=ax.transAxes, fontsize=8, va="top", fontweight="bold")
     fig.supxlabel("wavelength (nm)", fontsize=11)
     fig.supylabel(signal_name(), fontsize=11)
-    fig.suptitle(f"{folder.name}: {signal_name()} from {LAMBDA_0:g} to {LAMBDA_1:g} nm, each panel in the position of its membrane, same vertical scale"
+    fig.suptitle(f"{folder.name}: {signal_name()} from {LAMBDA_0:g} to {LAMBDA_1:g} nm\neach panel in the position of its membrane, same vertical scale"
+                 + (f"\ngreen = simulation ({Path(SIMULATION).name})" + ("" if POLARIZATION else ", right axis") if sim is not None else "")
                  + (f"\n{description(folder)}" if description(folder) else ""), fontsize=9)
-    plt.tight_layout(rect=(0.01, 0.01, 1, 0.96), h_pad=1.5, w_pad=1.5)
+    plt.tight_layout(rect=(0.01, 0.01, 1, 0.94), h_pad=1.5, w_pad=1.5)
     fig.savefig(folder / f"mosaic_spectra{suffix()}.png", dpi=150)
     print("Saved", folder / f"mosaic_spectra{suffix()}.png")
     plt.show()
