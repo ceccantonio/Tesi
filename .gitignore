@@ -4,3 +4,6 @@ __pycache__/
 # dati delle acquisizioni (CSV da 200+ MB, superano il limite di 100 MB di GitHub)
 Chiara_Bru/runs_oscilloscope/20*-*-*/
 *.csv
+
+# simulazioni COMSOL: file da centinaia di MB (limite di GitHub: 100 MB)
+*.mph
