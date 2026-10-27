@@ -60,7 +60,8 @@ SIMULATION = ""             # simulation file (CSV or text: wavelength or freque
 SIM_COLUMNS = (0, 1)        # (column of the wavelength/frequency, column of the simulated spectrum) in the SIMULATION file, counting from 0
 MOSAIC = False              # True: also draw ONE png with the spectra (1520-1570 nm) of all the membranes of RUN, each one in the position of its membrane
 MOSAIC_BLOCKS = (1, 1)      # split the mosaic in blocks, each one its own png and bigger panels: (blocks along the rows, blocks along the columns). (1, 1) = one png; (3, 2) = 6 blocks of about 20 membranes for 11 x 11; (6, 1) = 6 strips
-POLARIZATION = ""           # "co" or "cross": every measured spectrum is divided by the transmission reference of that polarization (reference/copol.csv or reference/crosspol.csv, measured once), so you get T like in the simulation; "" = no division
+POLARIZATION = ""           # "co" or "cross": every measured spectrum is divided by the transmission reference of that polarization (copol.csv or crosspol.csv in the REFERENCE_SET folder, measured once), so you get T like in the simulation; "" = no division
+REFERENCE_SET = "reference" # name of the folder (inside runs_oscilloscope) with the references copol.csv and crosspol.csv: use a different one for each sample / set-up (e.g. "reference_2026-10-27")
 FANO = ""                   # CSV file to fit with a Fano line shape (e.g. "2026-10-06/run_007/point_011_x91.818_y146.526.csv"); "" = skip
 
 # ---------------------------------------------------------------- parameters of the method
@@ -70,7 +71,7 @@ V_START = 0.9               # the CH1 ramp starts when CH1 exceeds this value...
 END_TOLERANCE = 0.3         # ...and ends when CH1 is within this of its maximum (starting guess for the ramp fit)
 RAMP_MARGIN = 0.25          # the ramp fit also uses points before and after: this fraction of the duration on each side
 LAMBDA_0, LAMBDA_1 = 1520.0, 1570.0   # nm at the start and at the end of the CH1 ramp, i.e. of the laser scan
-REFERENCE_DIR = DATA / "reference"    # the transmission references (scan without the sample), measured once: copol.csv and crosspol.csv
+REFERENCE_DIR = DATA / REFERENCE_SET  # the transmission references (scan without the sample), measured once: copol.csv and crosspol.csv
 PROMINENCE_THRESHOLD = 0.1  # a peak counts if taller than this fraction of the excursion (modulation)...
 MIN_SNR = 10                # ...and than this multiple of the residual noise of the moving average...
 RUN_THRESHOLD = 0.1         # ...and than this fraction of the tallest peak of the whole run (no resonance = n.a.)
