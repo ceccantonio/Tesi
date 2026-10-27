@@ -59,6 +59,7 @@ SAVE_NM_POINTS = None       # None = every sample of the window (about 25 MB per
 SIMULATION = ""             # simulation file (CSV or text: wavelength or frequency in one column, the spectrum in another): drawn above the measurement in the point plots
 SIM_COLUMNS = (0, 1)        # (column of the wavelength/frequency, column of the simulated spectrum) in the SIMULATION file, counting from 0
 MOSAIC = False              # True: also draw ONE png with the spectra (1520-1570 nm) of all the membranes of RUN, each one in the position of its membrane
+MOSAIC_BLOCKS = (1, 1)      # split the mosaic in blocks, each one its own png and bigger panels: (blocks along the rows, blocks along the columns). (1, 1) = one png; (3, 2) = 6 blocks of about 20 membranes for 11 x 11; (6, 1) = 6 strips
 POLARIZATION = ""           # "co" or "cross": every measured spectrum is divided by the transmission reference of that polarization (reference/copol.csv or reference/crosspol.csv, measured once), so you get T like in the simulation; "" = no division
 FANO = ""                   # CSV file to fit with a Fano line shape (e.g. "2026-10-06/run_007/point_011_x91.818_y146.526.csv"); "" = skip
 
@@ -510,7 +511,9 @@ def mosaic(folder, recompute=False):
     """ONE png with the spectrum (LAMBDA_0 to LAMBDA_1) of every membrane, each one in the position of its membrane: the top left of the
     png is the top left of the sample (same orientation as the heatmaps). Same vertical scale everywhere. With SIMULATION set, the
     simulated spectrum is drawn over every measured one (green): on the same axis if the spectra are the transmission T (POLARIZATION),
-    otherwise on its own axis on the right, since volts and T cannot share a scale."""
+    otherwise on its own axis on the right, since volts and T cannot share a scale.
+    MOSAIC_BLOCKS = (blocks along the rows, blocks along the columns) splits it in several pngs, each with bigger panels and the same vertical
+    scale (e.g. (3, 2): 6 blocks of about 20 membranes for an 11 x 11 sample); the files are mosaic_spectra_part1of6.png ..."""
     folder = run_path(folder)
     index, spectra = run_spectra(folder, recompute)
     registry = read_registry(folder).set_index("indice").loc[index]
@@ -527,11 +530,8 @@ def mosaic(folder, recompute=False):
         sim = (x_sim[inside], y_sim[inside])
         if POLARIZATION:                                                          # same axis: the scale must include the simulation
             low, high = min(low, sim[1].min()), max(high, sim[1].max())
-    fig, axes = plt.subplots(n_rows, n_columns, figsize=(2.0 * n_columns + 0.8, 1.7 * n_rows + 1.3), squeeze=False)
-    for ax in axes.flat:
-        ax.axis("off")
-    for k, i in enumerate(index):
-        ax = axes[rows[k], columns[k]]
+
+    def draw(ax, k):
         ax.axis("on")
         ax.plot(LAM_GRID, spectra[k], lw=0.7)
         if sim is not None:
@@ -552,15 +552,33 @@ def mosaic(folder, recompute=False):
         labels[0].set_ha("left")
         labels[-1].set_ha("right")
         ax.grid(alpha=0.3, lw=0.3)
-        ax.text(0.04, 0.93, str(i), transform=ax.transAxes, fontsize=8, va="top", fontweight="bold")
-    fig.supxlabel("wavelength (nm)", fontsize=11)
-    fig.supylabel(signal_name(), fontsize=11)
-    fig.suptitle(f"{folder.name}: {signal_name()} from {LAMBDA_0:g} to {LAMBDA_1:g} nm\neach panel in the position of its membrane, same vertical scale"
-                 + (f"\ngreen = simulation ({Path(SIMULATION).name})" + ("" if POLARIZATION else ", right axis") if sim is not None else "")
-                 + (f"\n{description(folder)}" if description(folder) else ""), fontsize=9)
-    plt.tight_layout(rect=(0.01, 0.01, 1, 0.94), h_pad=1.5, w_pad=1.5)
-    fig.savefig(folder / f"mosaic_spectra{suffix()}.png", dpi=150)
-    print("Saved", folder / f"mosaic_spectra{suffix()}.png")
+        ax.text(0.04, 0.93, str(index[k]), transform=ax.transAxes, fontsize=8, va="top", fontweight="bold",
+                bbox={"facecolor": "white", "alpha": 0.85, "pad": 1.5, "lw": 0})                  # readable even over the curve
+
+    row_blocks = np.array_split(np.arange(n_rows), max(1, min(MOSAIC_BLOCKS[0], n_rows)))
+    column_blocks = np.array_split(np.arange(n_columns), max(1, min(MOSAIC_BLOCKS[1], n_columns)))
+    total = len(row_blocks) * len(column_blocks)
+    width, height = (2.0, 1.7) if total == 1 else (2.8, 2.3)                       # bigger panels when the mosaic is split
+    n = 0
+    for rb in row_blocks:
+        for cb in column_blocks:
+            n += 1
+            fig, axes = plt.subplots(len(rb), len(cb), figsize=(width * len(cb) + 0.8, height * len(rb) + 1.3), squeeze=False)
+            for ax in axes.flat:
+                ax.axis("off")
+            for k in range(len(index)):
+                if rows[k] in rb and columns[k] in cb:
+                    draw(axes[rows[k] - rb[0], columns[k] - cb[0]], k)
+            fig.supxlabel("wavelength (nm)", fontsize=11)
+            fig.supylabel(signal_name(), fontsize=11)
+            where = "" if total == 1 else f"\nblock {n} of {total}: rows {rb[0] + 1}-{rb[-1] + 1}, columns {cb[0] + 1}-{cb[-1] + 1} of {n_rows} x {n_columns}"
+            fig.suptitle(f"{folder.name}: {signal_name()} from {LAMBDA_0:g} to {LAMBDA_1:g} nm\neach panel in the position of its membrane, same vertical scale"
+                         + (f"\ngreen = simulation ({Path(SIMULATION).name})" + ("" if POLARIZATION else ", right axis") if sim is not None else "")
+                         + where + (f"\n{description(folder)}" if description(folder) else ""), fontsize=9)
+            plt.tight_layout(rect=(0.01, 0.01, 1, 0.93), h_pad=1.5, w_pad=1.5)
+            name = f"mosaic_spectra{suffix()}" + ("" if total == 1 else f"_part{n}of{total}") + ".png"
+            fig.savefig(folder / name, dpi=150)
+            print("Saved", folder / name)
     plt.show()
 
 
