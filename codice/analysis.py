@@ -59,6 +59,7 @@ SAVE_NM_POINTS = None       # None = every sample of the window (about 25 MB per
 SIMULATION = ""             # simulation file (CSV or text: wavelength or frequency in one column, the spectrum in another): drawn above the measurement in the point plots
 SIM_COLUMNS = (0, 1)        # (column of the wavelength/frequency, column of the simulated spectrum) in the SIMULATION file, counting from 0
 MOSAIC = False              # True: also draw ONE png with the spectra (1520-1570 nm) of all the membranes of RUN, each one in the position of its membrane
+MOSAIC_YSCALE = "common"    # vertical scale of the mosaic panels: "common" = the same for all, from the lowest to the highest value of all the spectra (nothing is cut); "each" = every panel with the scale of its own spectrum
 MOSAIC_BLOCKS = (1, 1)      # split the mosaic in blocks, each one its own png and bigger panels: (blocks along the rows, blocks along the columns). (1, 1) = one png; (3, 2) = 6 blocks of about 20 membranes for 11 x 11; (6, 1) = 6 strips
 POLARIZATION = ""           # "co" or "cross": every measured spectrum is divided by the transmission reference of that polarization (copol.csv or crosspol.csv in the REFERENCE_SET folder, measured once), so you get T like in the simulation; "" = no division
 REFERENCE_SET = "reference" # name of the folder (inside runs_oscilloscope) with the references copol.csv and crosspol.csv: use a different one for each sample / set-up (e.g. "reference_2026-10-27")
@@ -523,7 +524,7 @@ def mosaic(folder, recompute=False):
         print("mosaic: the points are not a regular lattice (or there is no data): the spectra cannot be placed")
         return
     rows, columns, n_rows, n_columns = lay
-    low, high = np.nanpercentile(spectra, [1, 99])
+    low, high = np.nanmin(spectra), np.nanmax(spectra)                            # common scale: the absolute minimum and maximum, nothing is cut
     sim = None
     if SIMULATION:
         x_sim, y_sim = read_simulation(SIMULATION)
@@ -545,7 +546,12 @@ def mosaic(folder, recompute=False):
                 twin.yaxis.set_major_locator(MaxNLocator(3))
                 twin.tick_params(labelsize=7, length=3, width=0.8, pad=2, colors="tab:green")
         ax.set_xlim(LAMBDA_0, LAMBDA_1)
-        ax.set_ylim(low - 0.05 * (high - low), high + 0.05 * (high - low))
+        lo, hi = low, high
+        if MOSAIC_YSCALE == "each":                                                # every panel with the scale of its own spectrum
+            lo, hi = np.nanmin(spectra[k]), np.nanmax(spectra[k])
+            if sim is not None and POLARIZATION:
+                lo, hi = min(lo, sim[1].min()), max(hi, sim[1].max())
+        ax.set_ylim(lo - 0.05 * (hi - lo), hi + 0.05 * (hi - lo))
         ax.set_xticks([LAMBDA_0, (LAMBDA_0 + LAMBDA_1) / 2, LAMBDA_1])             # axes with numbers on every panel
         ax.yaxis.set_major_locator(MaxNLocator(3))
         ax.tick_params(labelsize=7, length=3, width=0.8, pad=2)
@@ -573,7 +579,7 @@ def mosaic(folder, recompute=False):
             fig.supxlabel("wavelength (nm)", fontsize=11)
             fig.supylabel(signal_name(), fontsize=11)
             where = "" if total == 1 else f"\nblock {n} of {total}: rows {rb[0] + 1}-{rb[-1] + 1}, columns {cb[0] + 1}-{cb[-1] + 1} of {n_rows} x {n_columns}"
-            fig.suptitle(f"{folder.name}: {signal_name()} from {LAMBDA_0:g} to {LAMBDA_1:g} nm\neach panel in the position of its membrane, same vertical scale"
+            fig.suptitle(f"{folder.name}: {signal_name()} from {LAMBDA_0:g} to {LAMBDA_1:g} nm\neach panel in the position of its membrane, " + ("same vertical scale" if MOSAIC_YSCALE != "each" else "each panel with its own vertical scale")
                          + (f"\ngreen = simulation ({Path(SIMULATION).name})" + ("" if POLARIZATION else ", right axis") if sim is not None else "")
                          + where + (f"\n{description(folder)}" if description(folder) else ""), fontsize=9)
             plt.tight_layout(rect=(0.01, 0.01, 1, 0.93), h_pad=1.5, w_pad=1.5)
