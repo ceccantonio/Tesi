@@ -12,6 +12,8 @@ With both channels ("TR") the plots of the points (point, view) and the mosaic s
 and the means are printed; with POLARIZATION the absorption (and losses) is estimated as A = 1 - (T + R). The run also gets the heatmaps of
 the mean T + R and of A (sum_TR*.csv). The reflection divided by the reference (POLARIZATION) is R = (reflection - DARK_R) / (transmission of the reference without the sample) * R_SCALE:
 the light reflected is compared with the light sent, up to the relative gain of the two detectors (R_SCALE, to be calibrated, e.g. with a mirror).
+With R_REFERENCE the reflection is divided by another signal instead: a scan of a known reflector (a mirror, R_REFERENCE_COLUMN = "R"), times its
+reflectivity R_SCALE; python analysis_3col.py --r-reference mirror.csv ...
 """
 import argparse
 import sys
@@ -31,7 +33,9 @@ T_COLUMN = "CH2"            # name of the transmission column in the files (if t
 R_COLUMN = "CH3"            # name of the reflection column in the files (if the name is not there, the 3rd column is used)
 DARK_T = 0.0                # level (V) of the transmission detector without light
 DARK_R = 0.0                # level (V) of the reflection detector without light
-R_SCALE = 1.0               # reflection with POLARIZATION: R is multiplied by this (relative gain of the reflection detector with respect to the transmission one)
+R_REFERENCE = ""            # what the reflection is divided by (with POLARIZATION): "" = the transmission reference without the sample (copol.csv / crosspol.csv, as for T); or a CSV with a scan of a known reflector (e.g. a mirror): its file name inside REFERENCE_SET, or a path. A dict gives one file per polarization: {"co": "mirror_co.csv", "cross": "mirror_cross.csv"}
+R_REFERENCE_COLUMN = "R"    # column of the R_REFERENCE file to divide by: "R" = the reflection column (a mirror measured with the reflection detector); "T" = the transmission column
+R_SCALE = 1.0               # R is multiplied by this: the reflectivity of the reference mirror (e.g. 0.97) if R_REFERENCE is a mirror; otherwise the relative gain of the reflection detector with respect to the transmission one
 SIMULATION_R = ""           # simulation file of the reflection, drawn above the reflection plots ("" = none); the one of the transmission is SIMULATION
 SIM_COLUMNS_R = (0, 1)      # (column of the wavelength/frequency, column of the simulated reflection) in SIMULATION_R
 
@@ -124,11 +128,48 @@ def save_nm(folder, name, ch1, volts):
 _reference_spectrum, _normalize, _spectrum, _run_heatmaps = base.reference_spectrum, base.normalize, base.spectrum, base.run_heatmaps
 _csv_plot, _mosaic = base.csv_plot, base.mosaic
 _in_reference = False
+_r_reference = {}
+
+
+def custom_reference():
+    """(wavelength, spectrum) of the R_REFERENCE file (column R_REFERENCE_COLUMN) with the dark level subtracted, or None if there is none for this
+    polarization. As for the transmission references, the big CSV is read once: its spectrum is saved next to it (name_R.npz / name_T.npz)."""
+    name = R_REFERENCE.get(base.POLARIZATION, "") if isinstance(R_REFERENCE, dict) else R_REFERENCE
+    if not name:
+        return None
+    path = next((q for q in (Path(name), base.REFERENCE_DIR / name, base.DATA / name) if q.is_file()), None)
+    if path is None:
+        raise FileNotFoundError(f"R_REFERENCE = {name!r}: file not found (looked for it as written, in {base.REFERENCE_DIR} and in {base.DATA})")
+    channel = R_REFERENCE_COLUMN.upper()
+    dark = DARK_R if channel == "R" else DARK_T
+    if (path, channel) not in _r_reference:
+        cache = path.with_name(f"{path.stem}_{channel}.npz")
+        if cache.exists() and cache.stat().st_mtime >= path.stat().st_mtime:
+            saved = np.load(cache)
+            lam, v = (saved["lam"] if len(saved["lam"]) else None), saved["s"]
+        else:
+            data = read_columns(path)
+            if data[channel] is None:
+                raise ValueError(f"{path.name}: no column {channel} to divide by (COLUMNS = {COLUMNS}, the file has {data['n']} columns)")
+            ch1, y = data["CH1"].astype(float), data[channel].astype(float)
+            level = base.DARK_LEVEL
+            base.DARK_LEVEL = 0.0                                          # the dark level is subtracted below, after the cache
+            try:
+                lam, v = base.spectrum(ch1, y) if base.fit_ramp(ch1) is not None else (None, np.median(y))
+            finally:
+                base.DARK_LEVEL = level
+            np.savez(cache, lam=np.array([] if lam is None else lam), s=v)
+        print(f"the reflection is divided by {path.name} (column {channel})")
+        _r_reference[(path, channel)] = (lam, v)
+    lam, v = _r_reference[(path, channel)]
+    return lam, v - dark
 
 
 def reference_spectrum():
-    """The reference is always the transmission measured without the sample, whatever the channel being analyzed."""
+    """The reference of T is always the transmission measured without the sample; the one of R is the same unless R_REFERENCE is set."""
     global _in_reference
+    if _channel == "R" and base.POLARIZATION and R_REFERENCE:
+        return custom_reference()
     current = _channel
     set_channel("T")
     _in_reference = True
@@ -375,13 +416,15 @@ class _Pyplot:
 
 # ---------------------------------------------------------------- from the terminal
 def main():
-    global COLUMNS, CHANNELS, DUAL
+    global COLUMNS, CHANNELS, DUAL, R_REFERENCE
     p = argparse.ArgumentParser(add_help=False)
     p.add_argument("--columns", type=int, choices=(2, 3), help="2: only CH1 and transmission; 3: also the reflection column")
     p.add_argument("--channels", help="T, R or TR")
+    p.add_argument("--r-reference", help="CSV (a mirror) the reflection is divided by, instead of the transmission reference")
     own, rest = p.parse_known_args()
     sys.argv = [sys.argv[0]] + rest
     COLUMNS = own.columns or COLUMNS
+    R_REFERENCE = own.r_reference or R_REFERENCE
     CHANNELS = (own.channels or CHANNELS).upper()
     channels = [c for c in "TR" if c in CHANNELS]
     if COLUMNS == 2 and "R" in channels:
