@@ -11,7 +11,7 @@ import datetime
 
 import numpy as np
 
-from acquisition import DATA, scan, still_acquisition
+from acquisition import CHANNELS, DATA, scan, still_acquisition
 from initialization import init
 
 SCAN = True          # True: laser scan 1520-1570 nm (spectrum); False: laser still, forced trigger (a single level)
@@ -49,10 +49,10 @@ def main():
         with registry.open(newline="") as f:
             n = max([int(r["id"]) for r in csv.DictReader(line for line in f if not line.startswith("#"))] + [0]) + 1
         file = f"m{n:03d}_{''.join(c if c.isalnum() or c in '-_' else '_' for c in name)}.csv"
-        np.savetxt(FOLDER / file, data, delimiter=",", header="CH1,CH2", comments="")
+        np.savetxt(FOLDER / file, data, delimiter=",", header=",".join(CHANNELS), comments="")
         with registry.open("a", newline="") as f:
             csv.writer(f).writerow([n, datetime.datetime.now().isoformat(timespec="seconds"), name, x, y, SCAN, file, notes])
-        print(f"Measurement {n} saved ({file}), CH2 median = {np.median(data[:, 1]):.5g} V")
+        print(f"Measurement {n} saved ({file}), median of " + ", ".join(f"{c} = {np.median(data[:, k]):.5g} V" for k, c in enumerate(CHANNELS[1:], start=1)))
 
 
 if __name__ == "__main__":

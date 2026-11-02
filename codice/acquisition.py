@@ -7,30 +7,31 @@ import numpy as np
 
 DATA = Path(__file__).resolve().parent.parent / "Chiara_Bru" / "runs_oscilloscope"   # YYYY-MM-DD/run_NNN folders go here
 MOTOR_LIMITS_MM = (0.0, 150.0)                                                          # motor travel
+CHANNELS = ("CH1", "CH2", "CH3")                                                              # saved columns: CH1 laser ramp, CH2 transmission detector, CH3 reflection detector
 RETURN_WAIT_S = 5.0                                                                     # after a scan, so that the laser goes back to 1520 nm
 
 
 def scan(laser, scope):
-    """One full scan of the laser synchronized with the scope. Returns (N, 2): CH1, CH2, or None if the scope never got READY."""
+    """One full scan of the laser synchronized with the scope. Returns (N, len(CHANNELS)): CH1, CH2, CH3, or None if the scope never got READY."""
     laser.set_range()
     if not scope.arm():                       # the laser must start only when the scope is READY
         return None
     laser.start()
     scope.wait()
     time.sleep(1.0)
-    data = scope.read()
+    data = scope.read(CHANNELS)
     time.sleep(RETURN_WAIT_S)
     return data
 
 
 def still_acquisition(scope):
-    """Acquisition without a scan (laser still, forced trigger). Returns (N, 2): CH1, CH2, or None if the scope never got READY."""
+    """Acquisition without a scan (laser still, forced trigger). Returns (N, len(CHANNELS)): CH1, CH2, CH3, or None if the scope never got READY."""
     if not scope.arm():
         return None
     scope.force_trigger()
     scope.wait()
     time.sleep(1.0)
-    return scope.read()
+    return scope.read(CHANNELS)
 
 
 def new_folder(prefix="run"):
@@ -63,7 +64,7 @@ def scan_points(points, laser, scope, motors, settle=1.0, description=""):
             if data is None:
                 print("   scope not READY: point skipped")
                 continue
-            np.savetxt(folder / name, data, delimiter=",", header="CH1,CH2", comments="")
+            np.savetxt(folder / name, data, delimiter=",", header=",".join(CHANNELS), comments="")
             with registry.open("a") as f:
                 f.write(f"{i},{x:.4f},{y:.4f},{name}\n")
     except KeyboardInterrupt:
