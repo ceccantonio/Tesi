@@ -14,6 +14,8 @@ the mean T + R and of A (sum_TR*.csv). The reflection divided by the reference (
 the light reflected is compared with the light sent, up to the relative gain of the two detectors (R_SCALE, to be calibrated, e.g. with a mirror).
 With R_REFERENCE the reflection is divided by another signal instead: a scan of a known reflector (a mirror, R_REFERENCE_COLUMN = "R"), times its
 reflectivity R_SCALE; python analysis_3col.py --r-reference mirror.csv ...
+With R_BACKGROUND too (a scan or a measurement of the detector without light, Ibkg) the reflectivity is R = (Isample - Ibkg) / (Imirror - Ibkg) * R_SCALE,
+the three of them in the reflection column.
 """
 import argparse
 import sys
@@ -33,7 +35,8 @@ T_COLUMN = "CH2"            # name of the transmission column in the files (if t
 R_COLUMN = "CH3"            # name of the reflection column in the files (if the name is not there, the 3rd column is used)
 DARK_T = 0.0                # level (V) of the transmission detector without light
 DARK_R = 0.0                # level (V) of the reflection detector without light
-R_REFERENCE = ""            # what the reflection is divided by (with POLARIZATION): "" = the transmission reference without the sample (copol.csv / crosspol.csv, as for T); or a CSV with a scan of a known reflector (e.g. a mirror): its file name inside REFERENCE_SET, or a path. A dict gives one file per polarization: {"co": "mirror_co.csv", "cross": "mirror_cross.csv"}
+R_REFERENCE = ""            # what the reflection is divided by (with POLARIZATION): "" = the transmission reference without the sample (copol.csv / crosspol.csv, as for T); or the CSV of the mirror, Imirror (a scan of a known reflector): its file name inside REFERENCE_SET, or a path. A dict gives one file per polarization: {"co": "mirror_co.csv", "cross": "mirror_cross.csv"}
+R_BACKGROUND = ""           # background of the reflection detector, Ibkg (a scan or a measurement without light on it): subtracted both from the sample and from the mirror, R = (Isample - Ibkg) / (Imirror - Ibkg). Same ways of writing as R_REFERENCE; "" = only the constant DARK_R is subtracted
 R_REFERENCE_COLUMN = "R"    # column of the R_REFERENCE file to divide by: "R" = the reflection column (a mirror measured with the reflection detector); "T" = the transmission column
 R_SCALE = 1.0               # R is multiplied by this: the reflectivity of the reference mirror (e.g. 0.97) if R_REFERENCE is a mirror; otherwise the relative gain of the reflection detector with respect to the transmission one
 SIMULATION_R = ""           # simulation file of the reflection, drawn above the reflection plots ("" = none); the one of the transmission is SIMULATION
@@ -131,17 +134,23 @@ _in_reference = False
 _r_reference = {}
 
 
-def custom_reference():
-    """(wavelength, spectrum) of the R_REFERENCE file (column R_REFERENCE_COLUMN) with the dark level subtracted, or None if there is none for this
-    polarization. As for the transmission references, the big CSV is read once: its spectrum is saved next to it (name_R.npz / name_T.npz)."""
-    name = R_REFERENCE.get(base.POLARIZATION, "") if isinstance(R_REFERENCE, dict) else R_REFERENCE
-    if not name:
-        return None
+def find_file(name):
+    """The CSV called name: as written, in the REFERENCE_SET folder or in runs_oscilloscope."""
     path = next((q for q in (Path(name), base.REFERENCE_DIR / name, base.DATA / name) if q.is_file()), None)
     if path is None:
-        raise FileNotFoundError(f"R_REFERENCE = {name!r}: file not found (looked for it as written, in {base.REFERENCE_DIR} and in {base.DATA})")
-    channel = R_REFERENCE_COLUMN.upper()
-    dark = DARK_R if channel == "R" else DARK_T
+        raise FileNotFoundError(f"{name!r}: file not found (looked for it as written, in {base.REFERENCE_DIR} and in {base.DATA})")
+    return path
+
+
+def chosen(option):
+    """The file name of R_REFERENCE / R_BACKGROUND for the polarization being analyzed (a string, or a dict with one name per polarization)."""
+    return option.get(base.POLARIZATION, "") if isinstance(option, dict) else option
+
+
+def file_spectrum(name, channel):
+    """(wavelength, spectrum) of the column channel ("T" or "R") of a CSV, or (None, level) if it is not a scan, without subtracting anything.
+    As for the transmission references, the big CSV is read once: its spectrum is saved next to it (name_R.npz / name_T.npz)."""
+    path = find_file(name)
     if (path, channel) not in _r_reference:
         cache = path.with_name(f"{path.stem}_{channel}.npz")
         if cache.exists() and cache.stat().st_mtime >= path.stat().st_mtime:
@@ -150,25 +159,52 @@ def custom_reference():
         else:
             data = read_columns(path)
             if data[channel] is None:
-                raise ValueError(f"{path.name}: no column {channel} to divide by (COLUMNS = {COLUMNS}, the file has {data['n']} columns)")
+                raise ValueError(f"{path.name}: no column {channel} to read (COLUMNS = {COLUMNS}, the file has {data['n']} columns)")
             ch1, y = data["CH1"].astype(float), data[channel].astype(float)
             level = base.DARK_LEVEL
-            base.DARK_LEVEL = 0.0                                          # the dark level is subtracted below, after the cache
+            base.DARK_LEVEL = 0.0                                          # nothing is subtracted here, nor in the cache
             try:
                 lam, v = base.spectrum(ch1, y) if base.fit_ramp(ch1) is not None else (None, np.median(y))
             finally:
                 base.DARK_LEVEL = level
             np.savez(cache, lam=np.array([] if lam is None else lam), s=v)
-        print(f"the reflection is divided by {path.name} (column {channel})")
         _r_reference[(path, channel)] = (lam, v)
-    lam, v = _r_reference[(path, channel)]
-    return lam, v - dark
+    return _r_reference[(path, channel)]
+
+
+def background():
+    """Ibkg of the reflection detector as (wavelength, values): the R_BACKGROUND file (a scan, or a level if it is a measurement without scan),
+    or the constant DARK_R."""
+    name = chosen(R_BACKGROUND)
+    return file_spectrum(name, "R") if name else (None, DARK_R)
+
+
+def at(spectrum_, lam):
+    """The values of (wavelength, values) at the wavelengths lam; a level stays a level; lam = None (no ramp) uses the median."""
+    sl, sv = spectrum_
+    if sl is None:
+        return sv
+    return np.median(sv) if lam is None else np.interp(lam, sl, sv)
+
+
+def custom_reference():
+    """(wavelength, Imirror - Ibkg) of the R_REFERENCE file (column R_REFERENCE_COLUMN), or None if there is none for this polarization."""
+    name = chosen(R_REFERENCE)
+    if not name:
+        return None
+    channel = R_REFERENCE_COLUMN.upper()
+    lam, v = file_spectrum(name, channel)
+    bkg = background() if channel == "R" else (None, DARK_T)               # Ibkg is the one of the reflection detector
+    if ("said", name) not in _r_reference:
+        _r_reference[("said", name)] = True
+        print(f"R = (I - {chosen(R_BACKGROUND) or 'DARK_R'}) / ({name} [column {channel}] - {chosen(R_BACKGROUND) or 'DARK_R'})" + (f" x {R_SCALE:g}" if R_SCALE != 1 else ""))
+    return lam, v - at(bkg, lam)
 
 
 def reference_spectrum():
     """The reference of T is always the transmission measured without the sample; the one of R is the same unless R_REFERENCE is set."""
     global _in_reference
-    if _channel == "R" and base.POLARIZATION and R_REFERENCE:
+    if _channel == "R" and base.POLARIZATION and chosen(R_REFERENCE):
         return custom_reference()
     current = _channel
     set_channel("T")
@@ -187,8 +223,16 @@ def spectrum(ch1, ch2, n_points=5000):
 
 
 def normalize(ch1, ch2):
-    out = _normalize(ch1, ch2)
-    return out * R_SCALE if _channel == "R" and base.POLARIZATION else out
+    """With POLARIZATION: T = (CH2 - DARK_T) / reference; R = (CH3 - Ibkg) / (Imirror - Ibkg) * R_SCALE, or divided by the transmission reference."""
+    if _channel != "R" or not base.POLARIZATION:
+        return _normalize(ch1, ch2)
+    f = base.fit_ramp(ch1)
+    ch2 = ch2 - at(background(), None if f is None else base.wavelength(np.arange(len(ch2)), f))   # Ibkg: a level, or a spectrum at the same wavelengths
+    level, base.DARK_LEVEL = base.DARK_LEVEL, 0.0                                                    # already subtracted
+    try:
+        return _normalize(ch1, ch2) * R_SCALE
+    finally:
+        base.DARK_LEVEL = level
 
 
 def suffix():
@@ -416,15 +460,17 @@ class _Pyplot:
 
 # ---------------------------------------------------------------- from the terminal
 def main():
-    global COLUMNS, CHANNELS, DUAL, R_REFERENCE
+    global COLUMNS, CHANNELS, DUAL, R_REFERENCE, R_BACKGROUND
     p = argparse.ArgumentParser(add_help=False)
     p.add_argument("--columns", type=int, choices=(2, 3), help="2: only CH1 and transmission; 3: also the reflection column")
     p.add_argument("--channels", help="T, R or TR")
+    p.add_argument("--r-background", help="CSV with the background of the reflection detector (Ibkg), subtracted from the sample and from the mirror")
     p.add_argument("--r-reference", help="CSV (a mirror) the reflection is divided by, instead of the transmission reference")
     own, rest = p.parse_known_args()
     sys.argv = [sys.argv[0]] + rest
     COLUMNS = own.columns or COLUMNS
     R_REFERENCE = own.r_reference or R_REFERENCE
+    R_BACKGROUND = own.r_background or R_BACKGROUND
     CHANNELS = (own.channels or CHANNELS).upper()
     channels = [c for c in "TR" if c in CHANNELS]
     if COLUMNS == 2 and "R" in channels:
