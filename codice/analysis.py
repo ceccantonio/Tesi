@@ -59,7 +59,7 @@ SAVE_NM_POINTS = None       # None = every sample of the window (about 25 MB per
 SIMULATION = ""             # simulation file (CSV or text: wavelength or frequency in one column, the spectrum in another): drawn above the measurement in the point plots
 SIM_COLUMNS = (0, 1)        # (column of the wavelength/frequency, column of the simulated spectrum) in the SIMULATION file, counting from 0
 MOSAIC = False              # True: also draw ONE png with the spectra (1520-1570 nm) of all the membranes of RUN, each one in the position of its membrane
-MOSAIC_YSCALE = "common"    # vertical scale of the mosaic panels: "common" = the same for all, from the lowest to the highest value of all the spectra (nothing is cut); "each" = every panel with the scale of its own spectrum
+MOSAIC_YSCALE = "common"    # vertical scale of the mosaic panels: "common" = the same fixed scale from 0 to 1 for all (values outside are cut); "each" = every panel with the scale of its own spectrum
 MOSAIC_BLOCKS = (1, 1)      # split the mosaic in blocks, each one its own png and bigger panels: (blocks along the rows, blocks along the columns). (1, 1) = one png; (3, 2) = 6 blocks of about 20 membranes for 11 x 11; (6, 1) = 6 strips
 POLARIZATION = ""           # "co" or "cross": every measured spectrum is divided by the transmission reference of that polarization (copol.csv or crosspol.csv in the REFERENCE_SET folder, measured once), so you get T like in the simulation; "" = no division
 REFERENCE_SET = "reference" # name of the folder (inside runs_oscilloscope) with the references copol.csv and crosspol.csv: use a different one for each sample / set-up (e.g. "reference_2026-10-27")
@@ -524,14 +524,11 @@ def mosaic(folder, recompute=False):
         print("mosaic: the points are not a regular lattice (or there is no data): the spectra cannot be placed")
         return
     rows, columns, n_rows, n_columns = lay
-    low, high = np.nanmin(spectra), np.nanmax(spectra)                            # common scale: the absolute minimum and maximum, nothing is cut
     sim = None
     if SIMULATION:
         x_sim, y_sim = read_simulation(SIMULATION)
         inside = (x_sim >= LAMBDA_0) & (x_sim <= LAMBDA_1)
         sim = (x_sim[inside], y_sim[inside])
-        if POLARIZATION:                                                          # same axis: the scale must include the simulation
-            low, high = min(low, sim[1].min()), max(high, sim[1].max())
 
     def draw(ax, k):
         ax.axis("on")
@@ -546,12 +543,13 @@ def mosaic(folder, recompute=False):
                 twin.yaxis.set_major_locator(MaxNLocator(3))
                 twin.tick_params(labelsize=7, length=3, width=0.8, pad=2, colors="tab:green")
         ax.set_xlim(LAMBDA_0, LAMBDA_1)
-        lo, hi = low, high
         if MOSAIC_YSCALE == "each":                                                # every panel with the scale of its own spectrum
             lo, hi = np.nanmin(spectra[k]), np.nanmax(spectra[k])
             if sim is not None and POLARIZATION:
                 lo, hi = min(lo, sim[1].min()), max(hi, sim[1].max())
-        ax.set_ylim(lo - 0.05 * (hi - lo), hi + 0.05 * (hi - lo))
+            ax.set_ylim(lo - 0.05 * (hi - lo), hi + 0.05 * (hi - lo))
+        else:                                                                      # common: the same fixed scale 0 to 1 everywhere
+            ax.set_ylim(0, 1)
         ax.set_xticks([LAMBDA_0, (LAMBDA_0 + LAMBDA_1) / 2, LAMBDA_1])             # axes with numbers on every panel
         ax.yaxis.set_major_locator(MaxNLocator(3))
         ax.tick_params(labelsize=7, length=3, width=0.8, pad=2)

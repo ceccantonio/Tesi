@@ -360,7 +360,6 @@ def overlay_mosaic(folder, recompute=False):
         return
     rows, columns, n_rows, n_columns = lay
     curves = [(data["T"][i], data["R"][i], data["T"][i] + data["R"][i]) for i in index]
-    low, high = np.nanmin([c for k in curves for c in k]), np.nanmax([c for k in curves for c in k])
     name_t, name_r, name_sum, ylabel = names()
 
     def draw(ax, k):
@@ -370,8 +369,11 @@ def overlay_mosaic(folder, recompute=False):
         ax.plot(base.LAM_GRID, r, color="tab:red", lw=0.7)
         ax.plot(base.LAM_GRID, total, color="black", lw=0.8)
         ax.set_xlim(base.LAMBDA_0, base.LAMBDA_1)
-        lo, hi = (min(np.nanmin(c) for c in curves[k]), max(np.nanmax(c) for c in curves[k])) if base.MOSAIC_YSCALE == "each" else (low, high)
-        ax.set_ylim(lo - 0.05 * (hi - lo), hi + 0.05 * (hi - lo))
+        if base.MOSAIC_YSCALE == "each":
+            lo, hi = min(np.nanmin(c) for c in curves[k]), max(np.nanmax(c) for c in curves[k])
+            ax.set_ylim(lo - 0.05 * (hi - lo), hi + 0.05 * (hi - lo))
+        else:                                                                      # common: the same fixed scale 0 to 1 everywhere
+            ax.set_ylim(0, 1)
         ax.set_xticks([base.LAMBDA_0, (base.LAMBDA_0 + base.LAMBDA_1) / 2, base.LAMBDA_1])
         ax.yaxis.set_major_locator(base.MaxNLocator(3))
         ax.tick_params(labelsize=7, length=3, width=0.8, pad=2)
