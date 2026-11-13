@@ -60,6 +60,19 @@ class Oscilloscope:
     def force_trigger(self):
         self.scope.write("TRIGger FORCe")
 
+    def acquire(self, timeout=30):
+        """One acquisition with nothing to synchronize (laser still): single sequence, forcing the trigger until it is over. It does not wait for
+        READY (arm() does, but that is needed only when something else, like the laser scan, must start at the right moment). True if it finished."""
+        self.scope.write("ACQ:STOPAFTER SEQUENCE")
+        self.scope.write("ACQ:STATE RUN")
+        t0 = time.time()
+        while int(self.scope.query("ACQ:STATE?")) != 0:
+            if time.time() - t0 > timeout:
+                return False
+            self.scope.write("TRIGger FORCe")
+            time.sleep(0.1)
+        return True
+
     def read(self, channels=("CH1", "CH2")):
         """Record of the channels in volts, array (N, n_channels)."""
         columns = []

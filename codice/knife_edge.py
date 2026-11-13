@@ -10,9 +10,7 @@ Before starting, put the edge where the signal is zero (beam completely blocked)
 in ONE direction (DIRECTION), for SPAN_UM, until the beam is completely free (or blocked); then the edge goes back to the starting X.
 Close PI MicroMove first (a serial port can be used by one program only).
 """
-import contextlib
 import datetime
-import io
 import sys
 import time
 from pathlib import Path
@@ -59,13 +57,9 @@ def report(x_um, y, y_err, name):
 
 
 def acquire(scope):
-    """Mean and standard deviation of CHANNEL in one acquisition with forced trigger, or None if the scope did not answer."""
-    with contextlib.redirect_stdout(io.StringIO()):                    # arm() and wait() print at every point
-        if not scope.arm():
-            return None
-        scope.force_trigger()
-        if not scope.wait():
-            return None
+    """Mean and standard deviation of CHANNEL in one acquisition, or None if the scope did not finish it."""
+    if not scope.acquire():
+        return None
     data = scope.read((CHANNEL,))[:, 0]
     return data.mean(), data.std()
 
@@ -89,7 +83,7 @@ def measure():
             time.sleep(SETTLE_S)
             result = acquire(scope)
             if result is None:
-                print(f"[{i + 1}/{len(targets)}] scope not READY, skipped")
+                print(f"[{i + 1}/{len(targets)}] the scope did not finish the acquisition, skipped")
                 continue
             rows.append((axis.pos, *result))
             print(f"[{i + 1}/{len(targets)}] X = {rows[-1][0]:.4f} mm   {CHANNEL} = {result[0]:.5g} V")
