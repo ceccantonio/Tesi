@@ -14,10 +14,13 @@ RETURN_WAIT_S = 5.0                                                             
 def scan(laser, scope):
     """One full scan of the laser synchronized with the scope. Returns (N, len(CHANNELS)): CH1, CH2, CH3, or None if the scope never got READY."""
     laser.set_range()
+    scope.select(CHANNELS)
     if not scope.arm():                       # the laser must start only when the scope is READY
         return None
     laser.start()
-    scope.wait()
+    if not scope.wait():
+        print("   the scope did not finish the acquisition (no trigger?)")
+        return None
     time.sleep(1.0)
     data = scope.read(CHANNELS)
     time.sleep(RETURN_WAIT_S)
@@ -26,10 +29,13 @@ def scan(laser, scope):
 
 def still_acquisition(scope):
     """Acquisition without a scan (laser still, forced trigger). Returns (N, len(CHANNELS)): CH1, CH2, CH3, or None if the scope never got READY."""
+    scope.select(CHANNELS)
     if not scope.arm():
         return None
     scope.force_trigger()
-    scope.wait()
+    if not scope.wait():
+        print("   the scope did not finish the acquisition")
+        return None
     time.sleep(1.0)
     return scope.read(CHANNELS)
 

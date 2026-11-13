@@ -23,6 +23,12 @@ class Oscilloscope:
         self.scope.write("DATA:WIDTH 1")
         self.scope.write("DATA:ENCdg ASCii")
 
+    def select(self, channels):
+        """Turn on the channels that will be read: the scope answers nothing for a channel that is off (the read then times out).
+        It must be done before arm(): a channel turned on later has no data in the record."""
+        for ch in channels:
+            self.scope.write(f"SELect:{ch} ON")
+
     def arm(self, timeout=120):
         """Single sequence; waits until the scope is READY (pre-trigger done: only then a trigger is accepted).
         Returns True if it got READY, False after the timeout."""
