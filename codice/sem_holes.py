@@ -1,6 +1,7 @@
 """Mean radius and period (with standard deviation) of the holes of a membrane, from its SEM photos.
 
-    python sem_holes.py C4mem11            # the 4 photos C4mem11_00.tif ... C4mem11_03.tif of the folder FOLDER, pooled together
+    python sem_holes.py                    # all the membranes of the folder FOLDER: results in sem_holes_results.txt
+    python sem_holes.py C4mem11            # only one: its 4 photos C4mem11_00.tif ... C4mem11_03.tif are pooled together
 
 The scale (nm per pixel) is read from the 1 um bar of each photo. A hole is a dark spot; the holes cut by the border of the photo are ignored.
 The radius is the one of the circle with the same area as the hole; the period is the distance between a hole and its nearest neighbour.
@@ -19,7 +20,7 @@ from scipy.spatial import cKDTree
 FOLDER = Path(__file__).resolve().parent.parent / "INFRACHIP_v2" / "membranesceltesem"
 BAR_UM = 1.0         # length of the scale bar written in the photo (um)
 FOOTER = 713         # the data bar of the SEM starts at this row: it is cut away
-THRESHOLD = 8        # a pixel belongs to a hole (dark inside, bright rim) if it differs from its surroundings by this many grey levels (0-255)
+THRESHOLD = 6       # a pixel belongs to a hole (dark inside, bright rim) if it differs from its surroundings by this many grey levels (0-255)
 MIN_AREA = 300       # pixels: smaller dark spots are not holes
 MAX_DEVIATION = 0.25 # a hole whose radius differs from the median of its photo by more than this fraction (0.25 = 25%) is discarded
 
@@ -75,10 +76,18 @@ def main(membrane):
         ax.set_title(path.name, fontsize=9)
         ax.axis("off")
     r, p = np.array(all_radii), np.array(all_periods)
-    print(f"\n{membrane}: {len(r)} holes in {len(paths)} photos\n  radius = {r.mean():.0f} +- {r.std():.0f} nm\n  period = {p.mean():.0f} +- {p.std():.0f} nm")
+    print(f"{membrane}: {len(r)} holes in {len(paths)} photos, radius = {r.mean():.0f} +- {r.std():.0f} nm, period = {p.mean():.0f} +- {p.std():.0f} nm\n")
     plt.tight_layout()
     plt.savefig(FOLDER / f"{membrane}_check.png", dpi=110)
+    plt.close()
+    return len(paths), len(r), r.mean(), r.std(), p.mean(), p.std()
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "C4mem11")
+    membranes = sys.argv[1:] or sorted({path.name[:-7] for path in FOLDER.glob("*_??.tif")})       # C4mem11_00.tif -> C4mem11
+    lines = [f"{'membrane':<12}{'photos':>7}{'holes':>7}{'radius_nm':>11}{'radius_std':>11}{'period_nm':>11}{'period_std':>11}"]
+    for membrane in membranes:
+        n_photos, n_holes, r_mean, r_std, p_mean, p_std = main(membrane)
+        lines.append(f"{membrane:<12}{n_photos:>7}{n_holes:>7}{r_mean:>11.0f}{r_std:>11.0f}{p_mean:>11.0f}{p_std:>11.0f}")
+    (FOLDER / "sem_holes_results.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("\n".join(lines), f"\nSaved {FOLDER / 'sem_holes_results.txt'}")
