@@ -6,7 +6,8 @@ the scope reads ONE channel (laser still, no scan) and the signal versus positio
 
 For a gaussian beam, intensity exp(-2 r^2 / w^2), the power that passes the edge is P(x) = B + A/2 (1 + erf(sqrt(2) (x - x0) / w)),
 where w is the waist (1/e^2 radius). A can be negative (signal that decreases as the edge advances).
-Put the edge near the middle of the beam before starting: the scan goes from -SPAN_UM/2 to +SPAN_UM/2 around the current X.
+Before starting, put the edge where the signal is zero (beam completely blocked) or full (beam completely free): the scan starts from the current X and goes
+in ONE direction (DIRECTION), for SPAN_UM, until the beam is completely free (or blocked); then the edge goes back to the starting X.
 Close PI MicroMove first (a serial port can be used by one program only).
 """
 import contextlib
@@ -24,7 +25,8 @@ from scipy.special import erf
 from acquisition import DATA
 
 CHANNEL = "CH3"      # the only channel read
-SPAN_UM = 400.0      # total length of the scan around the current position
+SPAN_UM = 600.0      # length of the scan from the current position: it must be larger than the beam (about 4 w)
+DIRECTION = 1        # +1 = X increasing, -1 = X decreasing
 STEP_UM = 1.0
 N_SAMPLES = 100000   # samples read at each point: their mean is the signal
 SETTLE_S = 0.2       # pause after each move
@@ -39,7 +41,7 @@ def report(x_um, y, y_err, name):
     """Fit of the error function: prints the waist and saves <name>.png."""
     A0 = y[-1] - y[0]
     x0 = x_um[np.argmin(abs(y - (y[0] + A0 / 2)))]
-    p, cov = curve_fit(edge, x_um, y, p0=[y[0], A0, x0, (x_um[-1] - x_um[0]) / 4])
+    p, cov = curve_fit(edge, x_um, y, p0=[y[0], A0, x0, abs(x_um[-1] - x_um[0]) / 4])
     w, w_err = abs(p[3]), np.sqrt(cov[3, 3])
     print(f"waist w = {w:.2f} +- {w_err:.2f} um (1/e^2 radius), edge centre x0 = {p[2]:.2f} um, "
           f"10-90% distance {1.2816 * w:.2f} um, FWHM of the intensity {1.1774 * w:.2f} um")
@@ -73,8 +75,8 @@ def measure():
     _, scope, motors = init(laser=False, n_samples=N_SAMPLES)
     axis = motors.x
     axis.tolerance = 0.002                                             # mm; the real position is saved anyway
-    center = axis.pos
-    targets = center + np.arange(-SPAN_UM / 2, SPAN_UM / 2 + STEP_UM / 2, STEP_UM) / 1000
+    start = axis.pos
+    targets = start + DIRECTION * np.arange(0, SPAN_UM + STEP_UM / 2, STEP_UM) / 1000
     print(f"{len(targets)} points from X = {targets[0]:.4f} to {targets[-1]:.4f} mm (step {STEP_UM} um), channel {CHANNEL}")
     if input("Move the X motor and measure? type 'yes': ").strip().lower() != "yes":
         return
@@ -93,7 +95,7 @@ def measure():
             print(f"[{i + 1}/{len(targets)}] X = {rows[-1][0]:.4f} mm   {CHANNEL} = {result[0]:.5g} V")
     except KeyboardInterrupt:
         print("Interrupted")
-    axis.move(float(center))                                           # the edge goes back where it was
+    axis.move(float(start))                                            # the edge goes back where it was
     if len(rows) < 10:
         print("Too few points to fit")
         return
