@@ -36,17 +36,17 @@ colonna_co = 3;                      % colonna di out per la co-pol: 3 = Tyy (2 
 colonna_cross = 4;                   % colonna di out per la cross-pol: 4 = Txy (5 = Tyx)
 peso_cross = 0;                      % peso della cross-pol nello scarto: 0 = lo scarto usa solo la co-pol (la cross si vede soltanto); T cross e' molto piu' piccola, servono pesi grandi (es. 100)
 ds = 300;                            % spessore dello strato inciso (nm): 300 = buchi che attraversano la membrana
-nsc = 2;                             % la supercella ha nsc x nsc buchi (10 = molto pesante)
-lambdav = 1540:1:1564;               % lunghezze d'onda da simulare (nm)
+nsc = 3;                             % la supercella ha nsc x nsc buchi (10 = molto pesante)
+lambdav = 1540:4:1564;               % lunghezze d'onda da simulare (nm)
 a_nom = 1300;                        % periodo nominale (nm)
-r_nom = 257;                         % raggio nominale (nm)
+r_nom = 250;                         % raggio nominale (nm)
 tol_a = 0;                        % tolleranza sul periodo: 0 = valore fisso; 0.03 = +-3%
 tol_r = 0;                           % tolleranza sul raggio
-step_a = 39;                         % passo sul periodo (nm)
-step_r = 1;                         % passo sul raggio (nm)
-sigma_nom = 60;                      % deviazione standard nominale dello shift dei buchi (nm)
+step_a = 30;                         % passo sul periodo (nm)
+step_r = 20;                         % passo sul raggio (nm)
+sigma_nom = 10;                      % deviazione standard nominale dello shift dei buchi (nm)
 tol_s = 0;                         % tolleranza su sigma: 0 = valore fisso; 0.1 = +-10%
-step_s = 1;                          % passo su sigma (nm)
+step_s = 2;                          % passo su sigma (nm)
 n_plot = 100;                         % quante simulazioni migliori disegnare a colori
 
 a_values = round((1-tol_a)*a_nom) : step_a : round((1+tol_a)*a_nom);
