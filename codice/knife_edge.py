@@ -8,7 +8,7 @@ For a gaussian beam, intensity exp(-2 r^2 / w^2), the power that passes the edge
 where w is the beam radius (1/e^2) at that z. A can be negative (signal that decreases as the edge advances).
 Before starting, put the edge where the signal is zero (beam completely blocked) or full (beam completely free): the scan starts from the current X and goes
 in ONE direction (DIRECTION), for SPAN_UM, until the beam is completely free (or blocked); then the edge goes back to the starting X.
-Every measurement is saved with its z and a description (first lines of the CSV, starting with #): beam_profile.py uses them to plot w(z) and fit the divergence.
+Every measurement is saved with its z (in um) and a description (first lines of the CSV, starting with #): beam_profile.py uses them to plot w(z) and fit the divergence.
 Close PI MicroMove first (a serial port can be used by one program only).
 """
 import datetime
@@ -45,13 +45,15 @@ def fit_edge(x_um, y):
 
 
 def read_edge(path):
-    """(x_mm, mean_V, std_V, z_mm or None, description) from a CSV of this script (lines starting with # are the z, the description and the header)."""
+    """(x_mm, mean_V, std_V, z_um or None, description) from a CSV of this script (lines starting with # are the z, the description and the header)."""
     z, notes, rows = None, [], []
     for line in Path(path).read_text(encoding="utf-8").splitlines():
         if line.startswith("#"):
             text = line.lstrip("# ").strip()
-            if text.startswith("z_mm"):
+            if text.startswith("z_um"):
                 z = float(text.split("=")[1])
+            elif text.startswith("z_mm"):                                # files written in mm by an older version
+                z = float(text.split("=")[1]) * 1000
             elif text and not text.startswith("x_mm"):
                 notes.append(text)
         else:
@@ -93,7 +95,7 @@ def acquire(scope):
 def ask_z():
     while True:
         try:
-            return float(input("z of this measurement (mm): ").replace(",", "."))
+            return float(input("z of this measurement (um): ").replace(",", "."))
         except ValueError:
             print("  write a number")
 
@@ -107,7 +109,7 @@ def measure():
     axis.tolerance = 0.002                                             # mm; the real position is saved anyway
     start = axis.pos
     targets = start + DIRECTION * np.arange(0, SPAN_UM + STEP_UM / 2, STEP_UM) / 1000
-    print(f"{len(targets)} points from X = {targets[0]:.4f} to {targets[-1]:.4f} mm (step {STEP_UM} um), channel {CHANNEL}, z = {z:g} mm")
+    print(f"{len(targets)} points from X = {targets[0]:.4f} to {targets[-1]:.4f} mm (step {STEP_UM} um), channel {CHANNEL}, z = {z:g} um")
     if input("Move the X motor and measure? type 'yes': ").strip().lower() != "yes":
         return
     rows = []
@@ -131,16 +133,16 @@ def measure():
         return
     FOLDER.mkdir(parents=True, exist_ok=True)
     name = FOLDER / f"edge_{datetime.datetime.now():%Y-%m-%d_%H%M%S}"
-    np.savetxt(name.with_suffix(".csv"), rows, delimiter=",", header=f"z_mm = {z:g}\n{description}\nx_mm,mean_V,std_V", comments="# ")
+    np.savetxt(name.with_suffix(".csv"), rows, delimiter=",", header=f"z_um = {z:g}\n{description}\nx_mm,mean_V,std_V", comments="# ")
     print("Saved", name.with_suffix(".csv"))
     x_mm, mean, std = np.array(rows).T
-    report((x_mm - x_mm[0]) * 1000, mean, std / np.sqrt(N_SAMPLES), name, f"z = {z:g} mm  {description}")
+    report((x_mm - x_mm[0]) * 1000, mean, std / np.sqrt(N_SAMPLES), name, f"z = {z:g} um  {description}")
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         x_mm, mean, std, z, description = read_edge(sys.argv[1])
         report((x_mm - x_mm[0]) * 1000, mean, std / np.sqrt(N_SAMPLES), Path(sys.argv[1]),
-               (f"z = {z:g} mm  " if z is not None else "") + description)
+               (f"z = {z:g} um  " if z is not None else "") + description)
     else:
         measure()
