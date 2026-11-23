@@ -3,6 +3,7 @@
     python beam_profile.py                        # all the edge_*.csv of runs_oscilloscope/knife_edge/
     python beam_profile.py folder                 # all the edge_*.csv of that folder
     python beam_profile.py a.csv b.csv c.csv      # only these files
+    python beam_profile.py --z 7600 8000          # only the measurements with z between 7600 and 8000 um (Z_RANGE in the code)
     python beam_profile.py --no-m2                # fit without M^2 as a free parameter: M^2 = M2_FIXED (1 = ideal gaussian beam), only w0 and z0 are fitted
 
 Every CSV is fitted with the error function (w at its z, written in the file). Then the points (z, w) are fitted with the caustic of a gaussian beam
@@ -24,6 +25,7 @@ from knife_edge import FOLDER, fit_edge, read_edge
 WAVELENGTH_NM = 1550.0   # for M^2 (the laser scans 1520-1570 nm)
 FIT_M2 = True            # True: M^2 is fitted (w0, z0, M^2); False: M^2 is fixed to M2_FIXED and only w0 and z0 are fitted (also with the option --no-m2)
 M2_FIXED = 1.0           # M^2 used when it is not fitted
+Z_RANGE = None           # (z_min, z_max) in um: only the measurements with z in this range are used; None = all (also with the option --z MIN MAX)
 
 
 def caustic(z, w0, z0, M2):
@@ -39,6 +41,11 @@ def with_error(f, p, cov):
 
 
 def main(args):
+    z_range = Z_RANGE
+    if "--z" in args:                                                            # --z MIN MAX
+        i = args.index("--z")
+        z_range = (float(args[i + 1]), float(args[i + 2]))
+        del args[i:i + 3]
     fit_m2 = FIT_M2 and "--no-m2" not in args                                     # option: fit without M^2
     args = [a for a in args if not a.startswith("--")]                           # the options are not files
     files = []
@@ -61,6 +68,13 @@ def main(args):
     order = np.argsort(z)
     z, w, w_err = np.array(z)[order], np.array(w)[order], np.array(w_err)[order]
     names = [names[i] for i in order]
+    if z_range is not None:                                                        # only the z in the range
+        keep = (z >= z_range[0]) & (z <= z_range[1])
+        print(f"z between {z_range[0]:g} and {z_range[1]:g} um: {keep.sum()} of {len(z)} measurements")
+        z, w, w_err = z[keep], w[keep], w_err[keep]
+        names = [n for n, k in zip(names, keep) if k]
+        if len(z) < 4:
+            sys.exit("fewer than 4 measurements in that z range")
     print("   z (um)    w (um)   description")
     for zi, wi, ei, n in zip(z, w, w_err, names):
         print(f"{zi:9.1f}  {wi:7.2f} +- {ei:.2f}   {n}")
