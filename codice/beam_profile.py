@@ -3,6 +3,7 @@
     python beam_profile.py                        # all the edge_*.csv of runs_oscilloscope/knife_edge/
     python beam_profile.py folder                 # all the edge_*.csv of that folder
     python beam_profile.py a.csv b.csv c.csv      # only these files
+    python beam_profile.py --no-m2                # fit without M^2 as a free parameter: M^2 = M2_FIXED (1 = ideal gaussian beam), only w0 and z0 are fitted
 
 Every CSV is fitted with the error function (w at its z, written in the file). Then the points (z, w) are fitted with the caustic of a gaussian beam
     w(z) = w0 sqrt(1 + (M^2 lambda (z - z0) / (pi w0^2))^2)
@@ -21,6 +22,8 @@ from scipy.optimize import curve_fit
 from knife_edge import FOLDER, fit_edge, read_edge
 
 WAVELENGTH_NM = 1550.0   # for M^2 (the laser scans 1520-1570 nm)
+FIT_M2 = True            # True: M^2 is fitted (w0, z0, M^2); False: M^2 is fixed to M2_FIXED and only w0 and z0 are fitted (also with the option --no-m2)
+M2_FIXED = 1.0           # M^2 used when it is not fitted
 
 
 def caustic(z, w0, z0, M2):
@@ -36,6 +39,8 @@ def with_error(f, p, cov):
 
 
 def main(args):
+    fit_m2 = FIT_M2 and "--no-m2" not in args                                     # option: fit without M^2
+    args = [a for a in args if not a.startswith("--")]                           # the options are not files
     files = []
     for a in (args or [FOLDER]):
         a = Path(a)
@@ -60,17 +65,35 @@ def main(args):
     for zi, wi, ei, n in zip(z, w, w_err, names):
         print(f"{zi:9.1f}  {wi:7.2f} +- {ei:.2f}   {n}")
 
-    zR0 = (z.max() - z.min()) / 2                                                  # first guess: a Rayleigh length of half the range
-    p, cov = curve_fit(caustic, z, w, p0=[w.min(), z[np.argmin(w)], np.pi * w.min() ** 2 / (WAVELENGTH_NM * 1e-3 * zR0)],
-                       sigma=np.maximum(w_err, 1e-3 * w), absolute_sigma=False)
-    p[0], p[2] = abs(p[0]), abs(p[2])
-    w0, z0, M2 = p
-    err = np.sqrt(np.diag(cov))
-    zR, zR_err = with_error(lambda a, b, c: np.pi * a ** 2 / (c * WAVELENGTH_NM * 1e-3), p, cov)         # um
-    theta, theta_err = with_error(lambda a, b, c: c * WAVELENGTH_NM / (np.pi * a), p, cov)        # lambda in nm / w0 in um = mrad
+    sigma = np.maximum(w_err, 1e-3 * w)                                            # error of every point, at least 0.1% of w
+    if fit_m2:
+        zR0 = (z.max() - z.min()) / 2                                              # first guess: a Rayleigh length of half the range
+        p, cov = curve_fit(caustic, z, w, p0=[w.min(), z[np.argmin(w)], np.pi * w.min() ** 2 / (WAVELENGTH_NM * 1e-3 * zR0)],
+                           sigma=sigma, absolute_sigma=False)
+        p[0], p[2] = abs(p[0]), abs(p[2])
+        w0, z0, M2 = p
+        err = np.sqrt(np.diag(cov))
+        model = lambda zz: caustic(zz, *p)
+        zR, zR_err = with_error(lambda a, b, c: np.pi * a ** 2 / (c * WAVELENGTH_NM * 1e-3), p, cov)         # um
+        theta, theta_err = with_error(lambda a, b, c: c * WAVELENGTH_NM / (np.pi * a), p, cov)        # lambda in nm / w0 in um = mrad
+    else:                                                                          # M^2 fixed: only w0 and z0 are fitted
+        M2 = M2_FIXED
+        fixed = lambda zz, w0, z0: caustic(zz, w0, z0, M2)
+        p, cov = curve_fit(fixed, z, w, p0=[w.min(), z[np.argmin(w)]], sigma=sigma, absolute_sigma=False)
+        p[0] = abs(p[0])
+        w0, z0 = p
+        err = np.sqrt(np.diag(cov))
+        model = lambda zz: fixed(zz, *p)
+        zR, zR_err = with_error(lambda a, b: np.pi * a ** 2 / (M2 * WAVELENGTH_NM * 1e-3), p, cov)           # um
+        theta, theta_err = with_error(lambda a, b: M2 * WAVELENGTH_NM / (np.pi * a), p, cov)          # mrad
+    chi2 = np.sum(((w - model(z)) / sigma) ** 2) / (len(z) - len(p))               # chi^2 per degree of freedom: about 1 or less = the curve describes the points
     print(f"\nwaist w0 = {w0:.2f} +- {err[0]:.2f} um at z0 = {z0:.1f} +- {err[1]:.2f} um")
-    print(f"beam quality M^2 = {M2:.2f} +- {err[2]:.2f}  (lambda = {WAVELENGTH_NM:g} nm)")
+    if fit_m2:
+        print(f"beam quality M^2 = {M2:.2f} +- {err[2]:.2f}  (lambda = {WAVELENGTH_NM:g} nm)")
+    else:
+        print(f"beam quality M^2 = {M2:g} FIXED, not fitted  (lambda = {WAVELENGTH_NM:g} nm)")
     print(f"divergence (half angle) = {theta:.2f} +- {theta_err:.2f} mrad (full angle {2 * theta:.2f} mrad), Rayleigh length zR = {zR:.1f} +- {zR_err:.1f} um")
+    print(f"chi^2 / dof = {chi2:.1f}")
 
     if z.max() - z.min() < 2 * zR:
         print(f"WARNING: the z range ({z.max() - z.min():.0f} um) is smaller than 2 zR ({2 * zR:.0f} um): w hardly changes, so M^2 and the divergence are poorly determined "
@@ -79,7 +102,7 @@ def main(args):
     plt.figure(figsize=(7.5, 4.8))
     plt.errorbar(z, w, w_err, fmt="o", color="k", label="knife edge")
     zs = np.linspace(z.min(), z.max(), 400)
-    plt.plot(zs, caustic(zs, *p), "r", label=f"fit: $w_0$ = {w0:.1f} um, $z_R$ = {zR:.1f} um\n$\\theta$ = {theta:.2f} mrad, $M^2$ = {M2:.2f}")
+    plt.plot(zs, model(zs), "r", label=f"fit: $w_0$ = {w0:.1f} um, $z_R$ = {zR:.1f} um\n$\\theta$ = {theta:.2f} mrad, $M^2$ = {M2:.2f}" + ("" if fit_m2 else " (fixed)") + f", chi2/dof = {chi2:.1f}")
     plt.xlabel("z (um)")
     plt.ylabel("beam radius w (um)")
     plt.legend()
